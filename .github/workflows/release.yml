@@ -1,17 +1,43 @@
 name: Release
 
+# Publishes a release whenever main carries a version (Cargo.toml) that has no release yet:
+# bump `version`, add a CHANGELOG.md section, push to main.
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      released: ${{ steps.version.outputs.released }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f 2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "released=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "released=false" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: check
+    if: needs.check.outputs.released == 'false'
     runs-on: ubuntu-latest
     # Build on Debian 13 so the binary matches the target system's glibc.
     container: debian:trixie
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
       - name: Install build tools
         run: |
@@ -25,16 +51,18 @@ jobs:
           cargo deb
       - name: Prepare release files
         run: |
-          version="${GITHUB_REF_NAME#v}"
           mkdir dist
           cp target/debian/*.deb dist/
-          tar czf "dist/dockling-${GITHUB_REF_NAME}-x86_64-linux.tar.gz" \
-            -C target/release dockling -C "$GITHUB_WORKSPACE" README.md LICENSE config/default.toml data/dockling.desktop
+          tar czf "dist/dockling-v${VERSION}-x86_64-linux.tar.gz" \
+            -C target/release dockling \
+            -C "$GITHUB_WORKSPACE" README.md LICENSE config/default.toml data/dockling.desktop
           (cd dist && sha256sum * > SHA256SUMS)
           # Release notes: this version's section of the changelog.
-          awk -v v="$version" '$0 ~ "^## "v" " {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+          awk -v v="$VERSION" '$0 ~ "^## "v" " {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
       - uses: softprops/action-gh-release@v3
         with:
-          name: Dockling ${{ github.ref_name }}
+          tag_name: v${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          name: Dockling v${{ env.VERSION }}
           body_path: notes.md
           files: dist/*
