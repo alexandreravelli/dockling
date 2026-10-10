@@ -1,0 +1,86 @@
+# Dockling configuration
+#
+# Location: ~/.config/dockling/config.toml, created on first start from
+# /etc/xdg/dockling/config.toml when that file exists (system-wide template),
+# otherwise from the built-in defaults.
+# After editing, apply the changes with:  dockling --reload
+# Colors are "#RRGGBB" or "#RRGGBBAA" (AA = opacity, 00 transparent .. ff opaque).
+
+# Screen edge: "left" (Ubuntu default), "right", "bottom" or "top".
+position = "left"
+
+# Icon size in pixels. Icons shrink automatically when the dock is full.
+icon_size = 48
+
+# Space around each icon inside its cell, between cells, and along the dock edges.
+icon_padding = 6
+spacing = 4
+margin = 4
+
+# true: the dock spans the whole screen edge (Ubuntu "panel mode").
+# false: the dock is only as long as its content and is centered.
+extend = true
+
+# Corner radius of the hover/active highlights (and of the dock itself when
+# extend = false and a compositor is running).
+corner_radius = 10.0
+
+# Reserve screen space so maximized windows do not go under the dock.
+reserve_space = true
+
+# Hide the dock when the pointer leaves it; touch the screen edge to show it again.
+# When enabled, no screen space is reserved.
+autohide = false
+autohide_delay_ms = 500
+
+# Show running applications that are not pinned.
+show_running = true
+
+# "Show Applications" button (3x3 grid) and the command it runs.
+show_apps_button = true
+apps_button_at_start = false
+apps_command = "xfce4-appfinder"
+
+# Left click on a running application:
+#   "minimize-or-cycle": focus it; if already focused, minimize it (single window)
+#                        or switch to its next window (several windows).
+#   "cycle":             focus it; if already focused, switch to its next window.
+click_action = "minimize-or-cycle"
+
+# Icon theme name, e.g. "Adwaita" or "elementary-xfce-dark".
+# Empty = use the XFCE theme (xfconf), then Adwaita, then hicolor.
+icon_theme = ""
+
+# Font used for tooltips and menus: path to a .ttf/.otf file.
+# Empty = DejaVu Sans / Noto Sans / Liberation Sans, whichever is installed.
+font = ""
+font_size = 13.0
+
+# Show the application name when hovering an icon.
+tooltips = true
+
+# Terminal used for applications with Terminal=true in their .desktop file.
+terminal = "x-terminal-emulator"
+
+# Pinned applications, in order. Use the .desktop file name with or without
+# ".desktop" (e.g. "firefox-esr", "org.xfce.mousepad"), a short name such as
+# "mousepad", or an absolute path to a .desktop file.
+# You can also pin/unpin from the right-click menu.
+pinned = [
+    "firefox-esr",
+    "xfce4-terminal",
+    "thunar",
+    "mousepad",
+]
+
+[colors]
+background = "#1d1d1de6"
+hover = "#ffffff26"
+active = "#ffffff40"
+indicator = "#e95420"
+attention = "#f6d32d"
+text = "#ffffff"
+tooltip_background = "#2b2b2bf2"
+menu_background = "#303030f5"
+menu_hover = "#e95420"
+apps_button = "#ffffff"

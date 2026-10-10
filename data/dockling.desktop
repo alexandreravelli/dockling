@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Dockling
+Comment=Lightweight application dock
+Exec=dockling
+Icon=view-app-grid
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

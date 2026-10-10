@@ -1,0 +1,51 @@
+[package]
+name = "dockling"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "An ultra-lightweight, Ubuntu-style application dock for X11 desktops such as XFCE"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/alexandreravelli/dockling"
+homepage = "https://github.com/alexandreravelli/dockling"
+keywords = ["dock", "x11", "xfce", "launcher", "taskbar"]
+categories = ["gui"]
+
+[features]
+default = ["svg"]
+# SVG icon support (most icon themes ship SVGs). Disable for an even smaller binary.
+svg = ["dep:resvg"]
+
+[dependencies]
+resvg = { version = "0.48", default-features = false, optional = true }
+rustix = { version = "1", default-features = false, features = ["std", "event"] }
+serde = { version = "1", features = ["derive"] }
+tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
+x11rb = { version = "0.14", features = ["randr", "image"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[package.metadata.deb]
+maintainer = "alexandreravelli"
+section = "x11"
+priority = "optional"
+depends = "$auto"
+recommends = "fonts-dejavu-core"
+suggests = "xfce4-appfinder"
+extended-description = """\
+Dockling is an ultra-lightweight, Ubuntu-style application dock for X11 desktops \
+such as XFCE. It pins launchers, shows running applications with indicators, \
+reserves screen space, and is configured with a single TOML file."""
+assets = [
+    ["target/release/dockling", "usr/bin/", "755"],
+    ["data/dockling.desktop", "etc/xdg/autostart/", "644"],
+    ["config/default.toml", "usr/share/doc/dockling/config.example.toml", "644"],
+    ["README.md", "usr/share/doc/dockling/", "644"],
+]
