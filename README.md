@@ -41,8 +41,8 @@
 No Rust needed. Grab the `.deb` from the [latest release](https://github.com/alexandreravelli/dockling/releases/latest):
 
 ```sh
-wget https://github.com/alexandreravelli/dockling/releases/download/v0.2.0/dockling_0.2.0-1_amd64.deb
-sudo apt install ./dockling_0.2.0-1_amd64.deb
+wget https://github.com/alexandreravelli/dockling/releases/download/v0.2.1/dockling_0.2.1-1_amd64.deb
+sudo apt install ./dockling_0.2.1-1_amd64.deb
 ```
 
 Log out and back in: the dock starts automatically (`/etc/xdg/autostart/dockling.desktop`).

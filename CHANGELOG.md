@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1 - 2026-10-10
+
+- New macOS-style app icon, also used by the dock's autostart entry.
+
 ## 0.2.0 - 2026-10-10
 
 - New **Dock Settings** window (`dockling-settings`) to change the appearance, behavior, pinned apps and colors without editing the config file. Changes apply to the dock right away. It opens from the dock's right-click menu, the applications menu and the XFCE Settings Manager.
