@@ -2,6 +2,7 @@ name: Release
 
 # Publishes a release whenever main carries a version (Cargo.toml) that has no release yet:
 # bump `version`, add a CHANGELOG.md section, push to main.
+# A commit message containing "[rebuild release]" rebuilds the files of the current release.
 on:
   push:
     branches: [main]
@@ -32,7 +33,7 @@ jobs:
 
   release:
     needs: check
-    if: needs.check.outputs.released == 'false'
+    if: needs.check.outputs.released == 'false' || contains(github.event.head_commit.message, '[rebuild release]')
     runs-on: ubuntu-latest
     # Build on Debian 13 so the binary matches the target system's glibc.
     container: debian:trixie
@@ -42,7 +43,8 @@ jobs:
       - name: Install build tools
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev git
+          # dpkg-dev provides dpkg-shlibdeps, which cargo-deb uses to fill in Depends.
+          apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev git dpkg-dev
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Build the Debian package
