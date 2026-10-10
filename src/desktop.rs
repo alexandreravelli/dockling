@@ -15,6 +15,8 @@ pub struct App {
     /// Lowercased StartupWMClass, empty when absent.
     pub wm_class: String,
     pub terminal: bool,
+    /// Hidden from menus (NoDisplay=true); still used to recognize windows.
+    pub no_display: bool,
 }
 
 impl App {
@@ -82,7 +84,7 @@ pub fn parse(path: &Path, id: String) -> Option<App> {
     let text = fs::read_to_string(path).ok()?;
     let mut in_entry = false;
     let (mut name, mut exec, mut icon, mut wm_class) = (None, None, String::new(), String::new());
-    let mut terminal = false;
+    let (mut terminal, mut no_display) = (false, false);
     for line in text.lines() {
         let line = line.trim();
         if line.starts_with('[') {
@@ -104,6 +106,7 @@ pub fn parse(path: &Path, id: String) -> Option<App> {
             "Icon" => icon = value,
             "StartupWMClass" => wm_class = value.to_lowercase(),
             "Terminal" => terminal = value == "true",
+            "NoDisplay" => no_display = value == "true",
             _ => {}
         }
     }
@@ -111,7 +114,7 @@ pub fn parse(path: &Path, id: String) -> Option<App> {
     if exec.is_empty() {
         return None;
     }
-    Some(App { name: name.unwrap_or_else(|| id.clone()), id, exec, icon, wm_class, terminal })
+    Some(App { name: name.unwrap_or_else(|| id.clone()), id, exec, icon, wm_class, terminal, no_display })
 }
 
 /// Unescapes a desktop-entry string value (\s \n \t \r \\).
@@ -280,6 +283,7 @@ mod tests {
             icon: String::new(),
             wm_class: class.into(),
             terminal: false,
+            no_display: false,
         }
     }
 

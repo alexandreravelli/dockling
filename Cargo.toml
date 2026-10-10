@@ -1,8 +1,8 @@
 [package]
 name = "dockling"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.92"
 description = "An ultra-lightweight, Ubuntu-style application dock for X11 desktops such as XFCE"
 license = "MIT"
 readme = "README.md"
@@ -12,11 +12,23 @@ keywords = ["dock", "x11", "xfce", "launcher", "taskbar"]
 categories = ["gui"]
 
 [features]
-default = ["svg"]
+default = ["svg", "settings"]
 # SVG icon support (most icon themes ship SVGs). Disable for an even smaller binary.
 svg = ["dep:resvg"]
+# The `dockling-settings` window (GTK 3, already present on XFCE desktops).
+settings = ["dep:gtk"]
+
+[[bin]]
+name = "dockling"
+path = "src/main.rs"
+
+[[bin]]
+name = "dockling-settings"
+path = "src/bin/dockling-settings.rs"
+required-features = ["settings"]
 
 [dependencies]
+gtk = { version = "0.19", optional = true, features = ["v3_24"] }
 resvg = { version = "0.48", default-features = false, optional = true }
 rustix = { version = "1", default-features = false, features = ["std", "event"] }
 serde = { version = "1", features = ["derive"] }
@@ -42,10 +54,14 @@ suggests = "xfce4-appfinder"
 extended-description = """\
 Dockling is an ultra-lightweight, Ubuntu-style application dock for X11 desktops \
 such as XFCE. It pins launchers, shows running applications with indicators, \
-reserves screen space, and is configured with a single TOML file."""
+reserves screen space, and is configured from a small settings window \
+(dockling-settings) or a single TOML file."""
 assets = [
     ["target/release/dockling", "usr/bin/", "755"],
+    ["target/release/dockling-settings", "usr/bin/", "755"],
     ["data/dockling.desktop", "etc/xdg/autostart/", "644"],
+    ["data/dockling-settings.desktop", "usr/share/applications/", "644"],
+    ["docs/logo.svg", "usr/share/icons/hicolor/scalable/apps/dockling.svg", "644"],
     ["config/default.toml", "usr/share/doc/dockling/config.example.toml", "644"],
     ["README.md", "usr/share/doc/dockling/", "644"],
 ]

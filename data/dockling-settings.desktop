@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Dock Settings
+GenericName=Dockling Settings
+Comment=Change the position, size, pinned apps and colors of the dock
+Exec=dockling-settings
+Icon=dockling
+Terminal=false
+StartupNotify=true
+Categories=GTK;Settings;DesktopSettings;X-XFCE-SettingsDialog;X-XFCE-PersonalSettings;
+Keywords=dock;dockling;launcher;taskbar;panel;

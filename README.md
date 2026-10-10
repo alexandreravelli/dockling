@@ -6,15 +6,15 @@
 
 **A tiny, Ubuntu-style dock for XFCE on Debian, written in Rust.**
 
-~2 MB binary · ~5 MB of RAM · 0% CPU when idle · no GTK, no Qt, no D-Bus
+~2 MB binary · ~5 MB of RAM · 0% CPU when idle · no GTK, Qt or D-Bus in the dock
 
 [![CI](https://github.com/alexandreravelli/dockling/actions/workflows/ci.yml/badge.svg)](https://github.com/alexandreravelli/dockling/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/alexandreravelli/dockling?color=e95420)](https://github.com/alexandreravelli/dockling/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange?logo=rust)](https://www.rust-lang.org)
+[![Rust 1.92+](https://img.shields.io/badge/rust-1.92%2B-orange?logo=rust)](https://www.rust-lang.org)
 [![Debian 13 · XFCE](https://img.shields.io/badge/Debian%2013-XFCE-a80030?logo=debian)](https://www.debian.org)
 
-[Install](#-install) · [Usage](#%EF%B8%8F-usage) · [Configuration](#%EF%B8%8F-configuration) · [Changelog](CHANGELOG.md)
+[Install](#-install) · [Usage](#%EF%B8%8F-usage) · [Settings](#%EF%B8%8F-settings) · [Changelog](CHANGELOG.md)
 
 </div>
 
@@ -31,7 +31,8 @@
 | 📐 **Plays nice with XFCE** | Reserves its screen edge and fits between your existing panels. Left, right, bottom or top, full-length or centered, optional autohide. |
 | 🎨 **Looks good anywhere** | Transparency and rounded corners with a compositor, crisp solid colors without one (ideal over VNC / noVNC). |
 | 🖼️ **Your icon theme** | PNG and SVG icons from your theme, with the window's own icon as a fallback. |
-| ⚙️ **One config file** | A commented TOML file, applied live with `dockling --reload`. Admins can preset it for every user. |
+| 🎛️ **Settings window** | Change the position, size, behavior, pinned apps and colors from *Dock Settings*: every change shows up in the dock at once. |
+| ⚙️ **One config file** | Prefer text? Everything is also in one commented TOML file, and admins can preset it for every user. |
 
 ## 📦 Install
 
@@ -40,29 +41,32 @@
 No Rust needed. Grab the `.deb` from the [latest release](https://github.com/alexandreravelli/dockling/releases/latest):
 
 ```sh
-wget https://github.com/alexandreravelli/dockling/releases/download/v0.1.0/dockling_0.1.0-1_amd64.deb
-sudo apt install ./dockling_0.1.0-1_amd64.deb
+wget https://github.com/alexandreravelli/dockling/releases/download/v0.2.0/dockling_0.2.0-1_amd64.deb
+sudo apt install ./dockling_0.2.0-1_amd64.deb
 ```
 
 Log out and back in: the dock starts automatically (`/etc/xdg/autostart/dockling.desktop`).
 To try it right away, run `dockling &`.
+Then right-click the dock and pick **Dock Settings** to make it yours.
 
 ### From source
 
-Dockling needs Rust 1.88 or newer (Debian 13 ships 1.85), so install the current toolchain with rustup:
+Dockling needs Rust 1.92 or newer (Debian 13 ships 1.85), so install the current toolchain with rustup.
+`libgtk-3-dev` is only needed for the settings window:
 
 ```sh
-sudo apt install -y build-essential curl git
+sudo apt install -y build-essential curl git libgtk-3-dev
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 . "$HOME/.cargo/env"
 
 git clone https://github.com/alexandreravelli/dockling.git
 cd dockling
 cargo build --release
-sudo make install   # /usr/local/bin/dockling + autostart for every user
+sudo make install   # dockling + dockling-settings in /usr/local, autostart for every user
 ```
 
-Want an even smaller binary? `cargo build --release --no-default-features` drops SVG support.
+Just the dock, without GTK? `cargo build --release --no-default-features --features svg`.
+Leave out `--features svg` too for an even smaller binary without SVG icons.
 
 ### 💡 XFCE tips
 
@@ -79,8 +83,8 @@ Want an even smaller binary? `cargo build --release --no-default-features` drops
 | **Middle click** | Open a new window |
 | **Scroll** | Switch between the app's windows |
 | **Drag a pinned icon** | Reorder your pinned apps (the new order is saved to the config) |
-| **Right click** | New Window · Pin to Dock / Unpin from Dock · Quit |
-| **Right click on ⠿** | Dock Settings (opens the config file) · Reload Dock |
+| **Right click on an app** | Open / New Window · Pin to Dock / Unpin from Dock · Quit · Dock Settings |
+| **Right click on empty space or ⠿** | Dock Settings · Reload Dock |
 
 ```text
 dockling                         start the dock
@@ -88,10 +92,25 @@ dockling --replace               start, replacing a running instance
 dockling --reload                apply configuration changes
 dockling --quit                  stop the dock
 dockling --print-default-config  show every option with its default
+dockling-settings                open the settings window
 ```
 
-## ⚙️ Configuration
+## ⚙️ Settings
 
+Open **Dock Settings** from the dock's right-click menu, the applications menu or the XFCE Settings Manager.
+
+| Page | What you can change |
+| --- | --- |
+| **Appearance** | Screen edge, full length or centered, keeping windows clear of the dock, autohide, icon size and theme, spacing, rounded corners |
+| **Behavior** | What a click does, running apps, the "Show Applications" button and its command, tooltips, font, terminal |
+| **Pinned Apps** | Add apps from a searchable list, move them up or down, remove them |
+| **Colors** | Background, hover and focus highlights, indicators, text, menus and tooltips, with transparency |
+
+Every change is saved and applied to the dock right away. **Reset** brings back the defaults and keeps your pinned apps.
+
+### 📝 The config file
+
+Dock Settings writes to a plain text file that you can also edit by hand.
 The first start creates `~/.config/dockling/config.toml` with every option documented
 ([see the defaults](config/default.toml)). A taste:
 
@@ -116,6 +135,7 @@ Pinned entries can be `.desktop` file names (with or without `.desktop`), short 
 
 Place a template in `/etc/xdg/dockling/config.toml` (`sudo make install-config` installs the default one).
 Every new user's configuration starts from it, so you can preset pinned apps and colors for everyone.
+Dock Settings keeps the comments in the file when it saves.
 
 ## 🔧 How it works
 
@@ -124,11 +144,14 @@ follows windows through EWMH properties such as `_NET_CLIENT_LIST` and `_NET_ACT
 draws with [tiny-skia](https://github.com/linebender/tiny-skia), renders SVG icons with
 [resvg](https://github.com/linebender/resvg) and text with [ttf-parser](https://github.com/harfbuzz/ttf-parser).
 The finished image becomes the window's background, so the X server repaints it on its own.
+Dock Settings is a separate GTK 3 program ([gtk-rs](https://gtk-rs.org)) that edits the same file and asks the
+dock to reload, so the dock itself never loads a toolkit.
 It works with any EWMH window manager and is tested with xfwm4.
 
 ## 🗺️ Roadmap
 
 - [x] Drag and drop to reorder pinned apps
+- [x] Settings window
 - [ ] Window list and previews in the menu
 - [ ] Multi-monitor placement option
 

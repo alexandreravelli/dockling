@@ -1,10 +1,10 @@
 //! Dockling: an ultra-lightweight, Ubuntu-style dock for X11 desktops (XFCE, ...).
 
-mod config;
-mod desktop;
 mod dock;
 mod icons;
 mod text;
+
+use dockling::{config, desktop};
 
 const HELP: &str = "\
 Dockling - an ultra-lightweight application dock for X11

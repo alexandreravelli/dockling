@@ -44,7 +44,7 @@ jobs:
         run: |
           apt-get update
           # dpkg-dev provides dpkg-shlibdeps, which cargo-deb uses to fill in Depends.
-          apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev git dpkg-dev
+          apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev git dpkg-dev libgtk-3-dev pkgconf
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Build the Debian package
@@ -56,8 +56,9 @@ jobs:
           mkdir dist
           cp target/debian/*.deb dist/
           tar czf "dist/dockling-v${VERSION}-x86_64-linux.tar.gz" \
-            -C target/release dockling \
-            -C "$GITHUB_WORKSPACE" README.md LICENSE config/default.toml data/dockling.desktop
+            -C target/release dockling dockling-settings \
+            -C "$GITHUB_WORKSPACE" README.md LICENSE config/default.toml data/dockling.desktop \
+            data/dockling-settings.desktop docs/logo.svg
           (cd dist && sha256sum * > SHA256SUMS)
           # Release notes: this version's section of the changelog.
           awk -v v="$VERSION" '$0 ~ "^## "v" " {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md

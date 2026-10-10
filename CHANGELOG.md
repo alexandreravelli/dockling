@@ -1,8 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-10-10
 
+- New **Dock Settings** window (`dockling-settings`) to change the appearance, behavior, pinned apps and colors without editing the config file. Changes apply to the dock right away. It opens from the dock's right-click menu, the applications menu and the XFCE Settings Manager.
 - Drag a pinned icon along the dock to reorder pinned apps; the new order is saved to the config file.
+- Right-clicking an empty part of the dock opens the dock menu (Dock Settings, Reload Dock), and app menus gain a Dock Settings entry.
+- When no font file is configured, the font is found through fontconfig (`fc-match`).
+- Building from source needs Rust 1.92 and `libgtk-3-dev` (only for the settings window; `--no-default-features --features svg` builds the dock alone).
 
 ## 0.1.0 - 2026-10-10
 

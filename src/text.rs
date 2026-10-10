@@ -25,7 +25,11 @@ pub struct Text {
 
 impl Text {
     pub fn load(configured: &str, px: f32) -> Option<Self> {
-        let candidates = std::iter::once(configured).filter(|p| !p.is_empty()).chain(FALLBACK_FONTS.iter().copied());
+        let fontconfig = fontconfig_sans();
+        let candidates = std::iter::once(configured)
+            .chain(fontconfig.as_deref())
+            .filter(|p| !p.is_empty())
+            .chain(FALLBACK_FONTS.iter().copied());
         for path in candidates {
             let Ok(data) = std::fs::read(path) else {
                 continue;
@@ -92,6 +96,19 @@ impl Text {
             pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
         }
     }
+}
+
+/// The system's default sans-serif font file, as chosen by fontconfig.
+fn fontconfig_sans() -> Option<String> {
+    let out = std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", "sans-serif:style=Regular"])
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let path = String::from_utf8(out.stdout).ok()?;
+    // fontconfig may pick a format ttf-parser cannot read (e.g. Type 1); the fixed list follows.
+    let readable = [".ttf", ".otf", ".ttc"].iter().any(|ext| path.to_lowercase().ends_with(ext));
+    (out.status.success() && readable).then_some(path)
 }
 
 fn glyph(face: &Face, c: char) -> GlyphId {

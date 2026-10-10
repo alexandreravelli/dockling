@@ -946,16 +946,20 @@ impl Dock {
         Ok(())
     }
 
-    fn open_menu(&mut self, idx: usize) -> Res<()> {
+    /// Opens the menu of an item, or the dock's own menu (`idx` = None) next to `at`.
+    fn open_menu(&mut self, idx: Option<usize>, at: (i32, i32)) -> Res<()> {
         self.hide_tooltip()?;
-        let item = &self.items[idx];
+        let dock_entries =
+            || vec![("Dock Settings".into(), Action::OpenSettings), ("Reload Dock".into(), Action::Reload)];
         let mut entries: Vec<(String, Action)> = Vec::new();
-        match item.kind {
-            Kind::AppsButton => {
-                entries.push(("Dock Settings".into(), Action::OpenSettings));
-                entries.push(("Reload Dock".into(), Action::Reload));
-            }
-            Kind::App => {
+        let rect = match idx {
+            Some(i) => self.items[i].rect,
+            None => R { x: at.0, y: at.1, w: 1, h: 1 },
+        };
+        match idx.map(|i| &self.items[i]) {
+            None => entries = dock_entries(),
+            Some(item) if item.kind == Kind::AppsButton => entries = dock_entries(),
+            Some(item) => {
                 if item.app.is_some() {
                     let label = if item.windows.is_empty() { "Open" } else { "New Window" };
                     entries.push((label.into(), Action::Launch(item.key.clone())));
@@ -967,12 +971,12 @@ impl Dock {
                     1 => entries.push(("Quit".into(), Action::CloseAll(item.key.clone()))),
                     n => entries.push((format!("Quit {n} Windows"), Action::CloseAll(item.key.clone()))),
                 }
+                entries.push(("Dock Settings".into(), Action::OpenSettings));
             }
         }
         if entries.is_empty() {
             return Ok(());
         }
-        let rect = item.rect;
         let Some(text) = self.text() else {
             return Ok(());
         };
@@ -1165,8 +1169,21 @@ impl Dock {
             }
             Action::TogglePin(key) => self.toggle_pin(&key)?,
             Action::OpenSettings => {
-                let path = self.cfg_path.to_string_lossy().replace('\'', "'\\''");
-                self.run_shell(&format!("exo-open '{path}' 2>/dev/null || xdg-open '{path}'"));
+                // The settings window next to this binary, else in PATH, else the file itself.
+                let beside = std::env::current_exe()
+                    .ok()
+                    .and_then(|p| Some(p.parent()?.join("dockling-settings")))
+                    .filter(|p| p.is_file());
+                match beside {
+                    Some(settings) => self.spawn(&[settings.to_string_lossy().into_owned()]),
+                    None => {
+                        let path = format!("'{}'", self.cfg_path.to_string_lossy().replace('\'', "'\\''"));
+                        self.run_shell(&format!(
+                            "if command -v dockling-settings >/dev/null; then exec dockling-settings; \
+                             else exo-open {path} 2>/dev/null || xdg-open {path}; fi"
+                        ));
+                    }
+                }
             }
             Action::Reload => self.reload()?,
         }
@@ -1379,12 +1396,17 @@ impl Dock {
                 }
             }
             Event::ButtonPress(e) if e.event == self.win => {
-                let Some(idx) = self.item_at(e.event_x as i32, e.event_y as i32) else {
+                let at = (e.event_x as i32, e.event_y as i32);
+                let Some(idx) = self.item_at(at.0, at.1) else {
+                    // Empty part of the dock: the dock's own menu.
+                    if e.detail == 3 {
+                        self.open_menu(None, at)?;
+                    }
                     return Ok(true);
                 };
                 self.hide_tooltip()?;
                 match e.detail {
-                    3 => self.open_menu(idx)?,
+                    3 => self.open_menu(Some(idx), at)?,
                     4 | 6 => self.scroll(idx, false, e.time)?,
                     5 | 7 => self.scroll(idx, true, e.time)?,
                     b => {

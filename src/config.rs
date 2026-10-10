@@ -17,8 +17,20 @@ pub enum Position {
 }
 
 impl Position {
+    pub const ALL: [Position; 4] = [Position::Left, Position::Right, Position::Bottom, Position::Top];
+
     pub fn horizontal(self) -> bool {
         matches!(self, Position::Bottom | Position::Top)
+    }
+
+    /// The value used in the config file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Position::Left => "left",
+            Position::Right => "right",
+            Position::Bottom => "bottom",
+            Position::Top => "top",
+        }
     }
 }
 
@@ -27,6 +39,16 @@ impl Position {
 pub enum ClickAction {
     MinimizeOrCycle,
     Cycle,
+}
+
+impl ClickAction {
+    /// The value used in the config file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ClickAction::MinimizeOrCycle => "minimize-or-cycle",
+            ClickAction::Cycle => "cycle",
+        }
+    }
 }
 
 /// Premultiplication happens at draw time; this is a straight RGBA color.
@@ -70,6 +92,12 @@ impl Color {
 
     pub fn opaque(self) -> Self {
         Color { a: 255, ..self }
+    }
+
+    /// "#rrggbb", or "#rrggbbaa" when not fully opaque.
+    pub fn to_hex(self) -> String {
+        let rgb = format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b);
+        if self.a == 255 { rgb } else { format!("{rgb}{:02x}", self.a) }
     }
 }
 
@@ -224,6 +252,115 @@ pub fn load(path: &Path) -> Config {
     }
 }
 
+/// Writes every setting into the file, keeping its comments and layout
+/// (missing keys are added). Used by the settings window.
+pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
+    let mut text = fs::read_to_string(path).unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
+    let str_value = |s: &str| {
+        let mut out = String::from("\"");
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                '\n' => out.push_str("\\n"),
+                '\t' => out.push_str("\\t"),
+                c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    };
+    let float = |f: f32| if f.fract() == 0.0 { format!("{f:.1}") } else { format!("{f}") };
+    let top: Vec<(&str, String)> = vec![
+        ("position", str_value(cfg.position.as_str())),
+        ("icon_size", cfg.icon_size.to_string()),
+        ("icon_padding", cfg.icon_padding.to_string()),
+        ("spacing", cfg.spacing.to_string()),
+        ("margin", cfg.margin.to_string()),
+        ("extend", cfg.extend.to_string()),
+        ("corner_radius", float(cfg.corner_radius)),
+        ("reserve_space", cfg.reserve_space.to_string()),
+        ("autohide", cfg.autohide.to_string()),
+        ("autohide_delay_ms", cfg.autohide_delay_ms.to_string()),
+        ("show_running", cfg.show_running.to_string()),
+        ("show_apps_button", cfg.show_apps_button.to_string()),
+        ("apps_button_at_start", cfg.apps_button_at_start.to_string()),
+        ("apps_command", str_value(&cfg.apps_command)),
+        ("click_action", str_value(cfg.click_action.as_str())),
+        ("icon_theme", str_value(&cfg.icon_theme)),
+        ("font", str_value(&cfg.font)),
+        ("font_size", float(cfg.font_size)),
+        ("tooltips", cfg.tooltips.to_string()),
+        ("terminal", str_value(&cfg.terminal)),
+    ];
+    for (key, value) in top {
+        text = set_value(&text, None, key, &value);
+    }
+    let c = &cfg.colors;
+    let colors = [
+        ("background", c.background),
+        ("hover", c.hover),
+        ("active", c.active),
+        ("indicator", c.indicator),
+        ("attention", c.attention),
+        ("text", c.text),
+        ("tooltip_background", c.tooltip_background),
+        ("menu_background", c.menu_background),
+        ("menu_hover", c.menu_hover),
+        ("apps_button", c.apps_button),
+    ];
+    for (key, color) in colors {
+        text = set_value(&text, Some("colors"), key, &str_value(&color.to_hex()));
+    }
+    text = replace_pinned(&text, &cfg.pinned);
+    // Write then rename, so the dock never reads a half-written file.
+    let tmp = path.with_extension("toml.tmp");
+    fs::write(&tmp, text)?;
+    fs::rename(tmp, path)
+}
+
+/// Sets a single-line `key = value` in the top level (`table` = None) or in `[table]`.
+fn set_value(text: &str, table: Option<&str>, key: &str, value: &str) -> String {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let mut current: Option<&str> = None;
+    let mut table_header = None;
+    let mut first_table = None;
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if let Some(name) = trimmed.strip_prefix('[').and_then(|t| t.strip_suffix(']')) {
+            current = Some(name.trim());
+            first_table.get_or_insert(i);
+            if current == table {
+                table_header = Some(i);
+            }
+            continue;
+        }
+        let is_key = trimmed.strip_prefix(key).is_some_and(|rest| rest.trim_start().starts_with('='));
+        if current == table && is_key {
+            let indent = &line[..line.len() - line.trim_start().len()];
+            let mut out: String = lines[..i].concat();
+            out.push_str(&format!("{indent}{key} = {value}\n"));
+            out.push_str(&lines[i + 1..].concat());
+            return out;
+        }
+    }
+    let new_line = format!("{key} = {value}\n");
+    let insert = |at: usize| format!("{}{new_line}{}", lines[..at].concat(), lines[at..].concat());
+    match table {
+        None => insert(first_table.unwrap_or(lines.len())),
+        Some(_) if table_header.is_some() => insert(table_header.unwrap_or(0) + 1),
+        Some(name) => {
+            let mut out = text.to_string();
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(&format!("\n[{name}]\n{new_line}"));
+            out
+        }
+    }
+}
+
 /// Rewrites only the `pinned = [...]` entry of the file, keeping the user's comments.
 pub fn save_pinned(path: &Path, pinned: &[String]) -> std::io::Result<()> {
     let text = fs::read_to_string(path).unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
@@ -287,6 +424,39 @@ mod tests {
         assert_eq!(parsed.pinned, vec!["a".to_string(), "b\"c".to_string()]);
         assert!(new.contains("# Dockling configuration"));
         assert_eq!(parsed.colors, Colors::default());
+    }
+
+    #[test]
+    fn save_round_trips_and_keeps_comments() {
+        let dir = std::env::temp_dir().join(format!("dockling-test-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, "# my comment\nicon_size = 32\n[colors]\ntext = \"#000000\"\n").unwrap();
+        let mut cfg = Config {
+            position: Position::Bottom,
+            icon_size: 64,
+            apps_command: "say \"hi\" \\ there".into(),
+            corner_radius: 7.5,
+            pinned: vec!["a".into(), "b".into()],
+            ..Config::default()
+        };
+        cfg.colors.background = Color::rgba(1, 2, 3, 4);
+        save(&path, &cfg).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("# my comment\n"));
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed, cfg);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn saving_the_default_file_changes_nothing() {
+        let mut text = DEFAULT_CONFIG.to_string();
+        for (key, value) in [("position", "\"left\""), ("icon_size", "48"), ("corner_radius", "10.0")] {
+            text = set_value(&text, None, key, value);
+        }
+        text = set_value(&text, Some("colors"), "indicator", "\"#e95420\"");
+        assert_eq!(text, DEFAULT_CONFIG);
     }
 
     #[test]
