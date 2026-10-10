@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Build on Debian 13 so the binary matches the target system's glibc.
+    container: debian:trixie
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl gcc libc6-dev git
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the Debian package
+        run: |
+          cargo install cargo-deb --locked
+          cargo deb
+      - name: Prepare release files
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          cp target/debian/*.deb dist/
+          tar czf "dist/dockling-${GITHUB_REF_NAME}-x86_64-linux.tar.gz" \
+            -C target/release dockling -C "$GITHUB_WORKSPACE" README.md LICENSE config/default.toml data/dockling.desktop
+          (cd dist && sha256sum * > SHA256SUMS)
+          # Release notes: this version's section of the changelog.
+          awk -v v="$version" '$0 ~ "^## "v" " {on=1; next} /^## / {on=0} on' CHANGELOG.md > notes.md
+      - uses: softprops/action-gh-release@v3
+        with:
+          name: Dockling ${{ github.ref_name }}
+          body_path: notes.md
+          files: dist/*
