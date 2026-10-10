@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Drag a pinned icon along the dock to reorder pinned apps; the new order is saved to the config file.
+
 ## 0.1.0 - 2026-10-10
 
 First release.

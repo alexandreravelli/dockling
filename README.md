@@ -27,7 +27,7 @@
 | 🪶 **Featherweight** | One small binary that sleeps until the X server has something to say. Perfect for VMs, thin clients and remote desktops. |
 | 🐧 **Feels like Ubuntu** | Pinned apps, one dot per open window, focused-app highlight, "Show Applications" grid button, tooltips. |
 | 🖱️ **Smart clicks** | Click to launch or focus, click again to minimize or cycle windows, middle-click for a new window, scroll to switch windows. |
-| 📌 **Right-click menu** | New Window, Pin to Dock / Unpin from Dock, Quit. |
+| 📌 **Pin and arrange** | Pin or unpin from the right-click menu, drag icons to reorder them. |
 | 📐 **Plays nice with XFCE** | Reserves its screen edge and fits between your existing panels. Left, right, bottom or top, full-length or centered, optional autohide. |
 | 🎨 **Looks good anywhere** | Transparency and rounded corners with a compositor, crisp solid colors without one (ideal over VNC / noVNC). |
 | 🖼️ **Your icon theme** | PNG and SVG icons from your theme, with the window's own icon as a fallback. |
@@ -78,6 +78,7 @@ Want an even smaller binary? `cargo build --release --no-default-features` drops
 | **Left click** | Launch the app, focus it, or minimize it / switch to its next window when it is already focused |
 | **Middle click** | Open a new window |
 | **Scroll** | Switch between the app's windows |
+| **Drag a pinned icon** | Reorder your pinned apps (the new order is saved to the config) |
 | **Right click** | New Window · Pin to Dock / Unpin from Dock · Quit |
 | **Right click on ⠿** | Dock Settings (opens the config file) · Reload Dock |
 
@@ -127,7 +128,7 @@ It works with any EWMH window manager and is tested with xfwm4.
 
 ## 🗺️ Roadmap
 
-- [ ] Drag and drop to reorder pinned apps
+- [x] Drag and drop to reorder pinned apps
 - [ ] Window list and previews in the menu
 - [ ] Multi-monitor placement option
 

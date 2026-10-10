@@ -121,6 +121,17 @@ struct Menu {
 
 const MENU_PAD: u32 = 4;
 
+/// Pointer travel (pixels) before a press on a pinned icon turns into a drag.
+const DRAG_THRESHOLD: i32 = 6;
+
+/// A pinned icon being dragged to a new position.
+struct Drag {
+    key: String,
+    origin: (i32, i32),
+    pos: (i32, i32),
+    active: bool,
+}
+
 pub struct Dock {
     conn: RustConnection,
     screen_num: usize,
@@ -156,6 +167,7 @@ pub struct Dock {
     icon_px: u32,
     hover: Option<String>,
     pressed: Option<(String, u8)>,
+    drag: Option<Drag>,
     hidden: bool,
     hide_at: Option<Instant>,
     children: Vec<Child>,
@@ -323,6 +335,7 @@ pub fn run(replace: bool) -> Res<()> {
         icon_px: 0,
         hover: None,
         pressed: None,
+        drag: None,
         hidden: false,
         hide_at: None,
         children: Vec::new(),
@@ -504,6 +517,10 @@ impl Dock {
     }
 
     fn rebuild_items(&mut self) -> Res<()> {
+        if self.dragging() {
+            // Keep the order being dragged; finish_drag() rebuilds afterwards.
+            return Ok(());
+        }
         let mut items = Vec::new();
         let apps_button = Item {
             kind: Kind::AppsButton,
@@ -782,8 +799,14 @@ impl Dock {
 
         let px = self.icon_px;
         let mut placeholders = Vec::new();
+        let dragged = self.drag.as_ref().filter(|d| d.active).map(|d| d.key.clone());
         for item in &self.items {
             let r = item.rect;
+            if dragged.as_deref() == Some(item.key.as_str()) {
+                // The empty slot where the dragged icon will land.
+                fill_rrect(&mut pm, r, self.cfg.corner_radius * r.w as f32 / 60.0, c.hover);
+                continue;
+            }
             let is_active = item.windows.contains(&self.active);
             let hovered = self.hover.as_deref() == Some(item.key.as_str());
             let highlight = match (is_active, hovered) {
@@ -806,6 +829,14 @@ impl Dock {
                 },
             }
             self.draw_dots(&mut pm, item, &c);
+        }
+        if let Some(i) = dragged.as_deref().and_then(|k| self.item_index(k)) {
+            let item = &self.items[i];
+            let (x, y) = self.drag_icon_origin(item.rect);
+            match self.icon_cache.get(&item.key).and_then(|i| i.as_ref()) {
+                Some(icon) => pm.draw_pixmap(x, y, icon.as_ref(), &PixmapPaint::default(), Transform::identity(), None),
+                None => placeholders.push((R { x: x + 2, y: y + 2, w: px - 4, h: px - 4 }, item.name.clone())),
+            }
         }
         // Applications without any icon: a tile with their initial.
         for (r, name) in placeholders {
@@ -1193,6 +1224,91 @@ impl Dock {
         Ok(())
     }
 
+    // ---------------------------------------------------------------- drag and drop
+
+    fn dragging(&self) -> bool {
+        self.drag.as_ref().is_some_and(|d| d.active)
+    }
+
+    /// Top-left corner of the dragged icon: it follows the pointer along the dock.
+    fn drag_icon_origin(&self, slot: R) -> (i32, i32) {
+        let px = self.icon_px as i32;
+        let (x, y) = self.drag.as_ref().map(|d| d.pos).unwrap_or_default();
+        let (ix, iy) = (slot.x + (slot.w as i32 - px) / 2, slot.y + (slot.h as i32 - px) / 2);
+        if self.cfg.position.horizontal() {
+            ((x - px / 2).clamp(0, (self.geom.w as i32 - px).max(0)), iy)
+        } else {
+            (ix, (y - px / 2).clamp(0, (self.geom.h as i32 - px).max(0)))
+        }
+    }
+
+    fn on_drag_motion(&mut self, x: i32, y: i32) -> Res<()> {
+        let Some(drag) = self.drag.as_mut() else { return Ok(()) };
+        drag.pos = (x, y);
+        let key = drag.key.clone();
+        if !drag.active {
+            let (dx, dy) = (x - drag.origin.0, y - drag.origin.1);
+            if dx.abs().max(dy.abs()) < DRAG_THRESHOLD {
+                return Ok(());
+            }
+            drag.active = true;
+            self.pressed = None;
+            self.hover = None;
+            self.hide_tooltip()?;
+        }
+        let pinned = |it: &Item| it.kind == Kind::App && it.pinned;
+        let (Some(from), Some(first), Some(last)) =
+            (self.item_index(&key), self.items.iter().position(pinned), self.items.iter().rposition(pinned))
+        else {
+            return Ok(());
+        };
+        // Pinned icons sit at regular steps from the start of the dock.
+        let step = (self.items[from].rect.w + self.cfg.spacing) as i32;
+        let along = if self.cfg.position.horizontal() { x } else { y } - self.cfg.margin as i32;
+        let slot = (along.max(0) / step.max(1)) as usize;
+        let slot = slot.clamp(first, last);
+        if slot != from {
+            let item = self.items.remove(from);
+            self.items.insert(slot, item);
+            self.layout()?;
+        }
+        self.render()
+    }
+
+    /// Saves the new order of the pinned apps, keeping the user's own spelling of each
+    /// entry and the position of entries that are not shown (apps not installed).
+    fn finish_drag(&mut self) -> Res<()> {
+        self.drag = None;
+        let visual: Vec<usize> =
+            self.items.iter().filter(|it| it.kind == Kind::App && it.pinned).filter_map(|it| it.app).collect();
+        let mut apps = std::mem::take(&mut self.apps);
+        let resolved: Vec<Option<usize>> =
+            self.cfg.pinned.iter().map(|entry| desktop::resolve(&mut apps, entry)).collect();
+        self.apps = apps;
+        let mut ordered = visual.iter().filter_map(|app| {
+            let i = resolved.iter().position(|r| *r == Some(*app))?;
+            Some(self.cfg.pinned[i].clone())
+        });
+        let mut pinned = Vec::new();
+        for (entry, app) in self.cfg.pinned.iter().zip(&resolved) {
+            match app {
+                Some(app) if visual.contains(app) => pinned.extend(ordered.next()),
+                _ => pinned.push(entry.clone()),
+            }
+        }
+        if pinned != self.cfg.pinned {
+            if let Err(e) = config::save_pinned(&self.cfg_path, &pinned) {
+                eprintln!("dockling: cannot save {}: {e}", self.cfg_path.display());
+            }
+            self.cfg.pinned = pinned;
+        }
+        if !self.pointer_inside()? {
+            self.hover = None;
+            self.start_autohide_timer();
+        }
+        self.rebuild_items()
+    }
+
     // ---------------------------------------------------------------- events
 
     fn on_motion(&mut self, x: i32, y: i32) -> Res<()> {
@@ -1225,13 +1341,16 @@ impl Dock {
                     self.draw_menu()?;
                 }
             }
+            Event::MotionNotify(e) if e.event == self.win && self.drag.is_some() => {
+                self.on_drag_motion(e.event_x as i32, e.event_y as i32)?
+            }
             Event::MotionNotify(e) if e.event == self.win => self.on_motion(e.event_x as i32, e.event_y as i32)?,
             Event::EnterNotify(e) if e.event == self.win => {
                 self.hide_at = None;
                 self.set_hidden(false)?;
                 self.on_motion(e.event_x as i32, e.event_y as i32)?;
             }
-            Event::LeaveNotify(e) if e.event == self.win && self.menu.is_none() => {
+            Event::LeaveNotify(e) if e.event == self.win && self.menu.is_none() && !self.dragging() => {
                 if e.mode == NotifyMode::NORMAL && e.detail != NotifyDetail::INFERIOR {
                     self.hover = None;
                     self.hide_tooltip()?;
@@ -1268,10 +1387,22 @@ impl Dock {
                     3 => self.open_menu(idx)?,
                     4 | 6 => self.scroll(idx, false, e.time)?,
                     5 | 7 => self.scroll(idx, true, e.time)?,
-                    b => self.pressed = Some((self.items[idx].key.clone(), b)),
+                    b => {
+                        let item = &self.items[idx];
+                        if b == 1 && item.kind == Kind::App && item.pinned {
+                            let at = (e.event_x as i32, e.event_y as i32);
+                            self.drag = Some(Drag { key: item.key.clone(), origin: at, pos: at, active: false });
+                        }
+                        self.pressed = Some((self.items[idx].key.clone(), b));
+                    }
                 }
             }
             Event::ButtonRelease(e) if e.event == self.win => {
+                if e.detail == 1 && self.dragging() {
+                    self.finish_drag()?;
+                    return Ok(true);
+                }
+                self.drag = None;
                 let Some((key, button)) = self.pressed.take() else {
                     return Ok(true);
                 };
