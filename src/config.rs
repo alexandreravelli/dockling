@@ -66,6 +66,10 @@ impl TryFrom<String> for Color {
 
     fn try_from(s: String) -> Result<Self, String> {
         let hex = s.strip_prefix('#').unwrap_or(&s);
+        // Byte slicing below needs ASCII: "#e95\u{a0}0" is 6 bytes long but cut inside a char.
+        if !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(format!("invalid color {s:?}, expected \"#RRGGBB\" or \"#RRGGBBAA\""));
+        }
         let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16);
         let parsed = match hex.len() {
             6 => (byte(0), byte(2), byte(4), Ok(255)),
@@ -472,5 +476,14 @@ mod tests {
         assert_eq!(Color::try_from("#102030".to_string()).unwrap(), Color::rgba(16, 32, 48, 255));
         assert_eq!(Color::try_from("#10203040".to_string()).unwrap().a, 64);
         assert!(Color::try_from("#12".to_string()).is_err());
+    }
+
+    #[test]
+    fn non_ascii_colors_are_rejected_without_panicking() {
+        assert!(Color::try_from("#e95\u{a0}0".to_string()).is_err());
+        assert!(Color::try_from("#éé0000".to_string()).is_err());
+        assert!(Color::try_from("#+12345".to_string()).is_err(), "from_str_radix would take the sign");
+        let text = "[colors]\ntext = \"#e95\u{a0}0\"\n";
+        assert!(toml::from_str::<Config>(text).is_err());
     }
 }
