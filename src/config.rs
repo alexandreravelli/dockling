@@ -1,7 +1,11 @@
 //! Configuration file handling (`~/.config/dockling/config.toml`).
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
+use std::cmp::Ordering;
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// The documented default configuration, written on first start.
@@ -194,16 +198,126 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Clamp values that would make the dock unusable.
-    fn sanitize(mut self) -> Self {
-        self.icon_size = self.icon_size.clamp(16, 256);
-        self.icon_padding = self.icon_padding.min(64);
-        self.spacing = self.spacing.min(64);
-        self.margin = self.margin.min(64);
-        self.corner_radius = self.corner_radius.clamp(0.0, 128.0);
-        self.font_size = self.font_size.clamp(6.0, 72.0);
+    /// Brings values that would make the dock unusable back into range, with a warning.
+    fn sanitize(mut self, text: &str, warnings: &mut Vec<Warning>) -> Self {
+        let fixes = [
+            ("icon_size", bound(&mut self.icon_size, 16, 256)),
+            ("icon_padding", bound(&mut self.icon_padding, 0, 64)),
+            ("spacing", bound(&mut self.spacing, 0, 64)),
+            ("margin", bound(&mut self.margin, 0, 64)),
+            ("corner_radius", bound(&mut self.corner_radius, 0.0, 128.0)),
+            ("font_size", bound(&mut self.font_size, 6.0, 72.0)),
+        ];
+        for (key, message) in fixes {
+            if let Some(message) = message {
+                warnings.push(Warning { line: key_line(text, None, key), message: format!("{key} {message}") });
+            }
+        }
         self
     }
+}
+
+/// Brings `value` into `min..=max`, and says what was wrong; None when it was in range.
+fn bound<T: PartialOrd + Copy + fmt::Display>(value: &mut T, min: T, max: T) -> Option<String> {
+    let fixed = match (*value).partial_cmp(&min) {
+        // Below the range, or not a number.
+        Some(Ordering::Less) | None => min,
+        _ if *value > max => max,
+        _ => return None,
+    };
+    let message = format!("= {value} is out of range ({min} to {max}); using {fixed}");
+    *value = fixed;
+    Some(message)
+}
+
+/// The top-level settings, in the order of the default file.
+pub const KEYS: [&str; 22] = [
+    "position",
+    "icon_size",
+    "icon_padding",
+    "spacing",
+    "margin",
+    "extend",
+    "corner_radius",
+    "reserve_space",
+    "autohide",
+    "autohide_delay_ms",
+    "show_running",
+    "show_apps_button",
+    "apps_button_at_start",
+    "apps_command",
+    "click_action",
+    "icon_theme",
+    "font",
+    "font_size",
+    "tooltips",
+    "terminal",
+    "pinned",
+    "colors",
+];
+
+/// The settings of the `[colors]` table.
+pub const COLOR_KEYS: [&str; 10] = [
+    "background",
+    "hover",
+    "active",
+    "indicator",
+    "attention",
+    "text",
+    "tooltip_background",
+    "menu_background",
+    "menu_hover",
+    "apps_button",
+];
+
+/// A problem in the configuration file. The setting is skipped (or brought back into range);
+/// the other settings still apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Warning {
+    /// The line of the problem in the file, starting at 1, when it is known.
+    pub line: Option<usize>,
+    /// What is wrong, and what Dockling does about it.
+    pub message: String,
+}
+
+impl fmt::Display for Warning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.line {
+            Some(line) => write!(f, "line {line}: {}", self.message),
+            None => f.write_str(&self.message),
+        }
+    }
+}
+
+/// Why the configuration file could not be read or written.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+pub enum ConfigError {
+    /// The file exists but cannot be read.
+    #[error("cannot read {}: {error}", path.display())]
+    Read {
+        /// The configuration file.
+        path: PathBuf,
+        /// Why it cannot be read.
+        error: io::Error,
+    },
+    /// The file cannot be written.
+    #[error("cannot write {}: {error}", path.display())]
+    Write {
+        /// The configuration file.
+        path: PathBuf,
+        /// Why it cannot be written.
+        error: io::Error,
+    },
+}
+
+/// A configuration, and the problems found in its file.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Loaded {
+    /// The settings: the file's valid ones, the defaults for the others.
+    pub config: Config,
+    /// Every key or value of the file that was skipped or changed, in reading order.
+    pub warnings: Vec<Warning>,
 }
 
 pub fn config_path() -> PathBuf {
@@ -226,39 +340,160 @@ pub fn home_dir() -> PathBuf {
     std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Loads the configuration, creating the default file if it does not exist.
-/// A broken file is reported on stderr and the defaults are used instead.
-pub fn load(path: &Path) -> Config {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            if let Some(dir) = path.parent() {
-                let _ = fs::create_dir_all(dir);
-            }
+/// Loads the configuration at `path`. When the file does not exist it is created from the
+/// system-wide template (`/etc/xdg/dockling/config.toml`) or the defaults, so new users get a
+/// commented file to edit. Problems in the file are returned as [`Warning`]s, see [`parse`].
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Read`] when the file exists but cannot be read.
+pub fn load(path: &Path) -> Result<Loaded, ConfigError> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(parse(&text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
             // New users start from the system-wide template when an admin provides one.
             let text = system_config().unwrap_or_else(|| DEFAULT_CONFIG.to_string());
-            if let Err(e) = fs::write(path, &text) {
-                eprintln!("dockling: cannot write {}: {e}", path.display());
+            let mut loaded = parse(&text);
+            let created = path.parent().map_or(Ok(()), fs::create_dir_all).and_then(|()| fs::write(path, &text));
+            if let Err(error) = created {
+                let error = ConfigError::Write { path: path.to_path_buf(), error };
+                loaded.warnings.push(Warning { line: None, message: error.to_string() });
             }
-            text
+            Ok(loaded)
         }
+        Err(error) => Err(ConfigError::Read { path: path.to_path_buf(), error }),
+    }
+}
+
+/// Reads a configuration file's text. Every valid setting applies. An unknown key, a value of
+/// the wrong type or out of range is skipped (or brought back into range) and reported, so one
+/// typo never resets the whole file. A file that is not valid TOML gives the defaults.
+///
+/// ```
+/// use dockling::config::{self, Position};
+///
+/// let loaded = config::parse("position = \"bottom\"\ntooltip = false\nicon_size = \"big\"\n");
+/// assert_eq!(loaded.config.position, Position::Bottom);
+/// assert_eq!(loaded.config.icon_size, 48, "the default");
+/// let warnings: Vec<String> = loaded.warnings.iter().map(ToString::to_string).collect();
+/// assert_eq!(warnings[0], "line 2: unknown setting \"tooltip\". Did you mean \"tooltips\"?");
+/// assert!(warnings[1].starts_with("line 3: invalid value for \"icon_size\""));
+/// ```
+#[must_use]
+pub fn parse(text: &str) -> Loaded {
+    let mut warnings = Vec::new();
+    let table: toml::Table = match text.parse() {
+        Ok(table) => table,
         Err(e) => {
-            eprintln!("dockling: cannot read {}: {e}", path.display());
-            return Config::default();
+            let line = e.span().map(|span| line_of(text, span.start));
+            warnings.push(Warning { line, message: format!("{}; using the default settings", e.message().trim()) });
+            return Loaded { config: Config::default(), warnings };
         }
     };
-    match toml::from_str::<Config>(&text) {
-        Ok(cfg) => cfg.sanitize(),
-        Err(e) => {
-            eprintln!("dockling: error in {}:\n{e}\nUsing default settings.", path.display());
-            Config::default()
+    let mut accepted = toml::Table::new();
+    for (key, value) in table {
+        let line = key_line(text, None, &key);
+        match (key.as_str(), value) {
+            ("colors", toml::Value::Table(colors)) => {
+                let mut ok = toml::Table::new();
+                for (name, value) in colors {
+                    let line = key_line(text, Some("colors"), &name);
+                    accept::<Colors>(&mut ok, name, value, &COLOR_KEYS, "colors.", line, &mut warnings);
+                }
+                accepted.insert(key, toml::Value::Table(ok));
+            }
+            ("colors", _) => {
+                warnings.push(Warning { line, message: "colors must be a table: [colors]".into() });
+            }
+            (_, value) => accept::<Config>(&mut accepted, key, value, &KEYS, "", line, &mut warnings),
         }
     }
+    // Each accepted value deserialized on its own, so together they do too.
+    let config: Config = toml::Value::Table(accepted).try_into().unwrap_or_default();
+    let config = config.sanitize(text, &mut warnings);
+    // Tables are read in key order: report in file order.
+    warnings.sort_by_key(|w| w.line.unwrap_or(usize::MAX));
+    Loaded { config, warnings }
+}
+
+/// Adds `key = value` to `accepted` when `T` takes it, else reports why it is skipped.
+fn accept<T: DeserializeOwned>(
+    accepted: &mut toml::Table,
+    key: String,
+    value: toml::Value,
+    keys: &[&str],
+    prefix: &str,
+    line: Option<usize>,
+    warnings: &mut Vec<Warning>,
+) {
+    if !keys.contains(&key.as_str()) {
+        let hint = match similar(&key, keys) {
+            Some(close) => format!(". Did you mean \"{prefix}{close}\"?"),
+            None => String::new(),
+        };
+        warnings.push(Warning { line, message: format!("unknown setting \"{prefix}{key}\"{hint}") });
+        return;
+    }
+    let mut trial = accepted.clone();
+    trial.insert(key.clone(), value);
+    match toml::Value::Table(trial.clone()).try_into::<T>() {
+        Ok(_) => *accepted = trial,
+        Err(e) => warnings.push(Warning {
+            line,
+            message: format!("invalid value for \"{prefix}{key}\": {}; using the default", e.message().trim()),
+        }),
+    }
+}
+
+/// The closest of `keys` to `key`, when it is one or two typos away.
+fn similar<'a>(key: &str, keys: &[&'a str]) -> Option<&'a str> {
+    keys.iter().map(|k| (distance(key, k), *k)).filter(|(d, _)| *d <= 2).min().map(|(_, k)| k)
+}
+
+/// Edits (insertion, deletion, substitution, swap of two neighbours) from `a` to `b`.
+fn distance(a: &str, b: &str) -> usize {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut rows = vec![(0..=b.len()).collect::<Vec<usize>>()];
+    for i in 1..=a.len() {
+        let mut row = vec![i; b.len() + 1];
+        for j in 1..=b.len() {
+            let cost = usize::from(a[i - 1] != b[j - 1]);
+            row[j] = (rows[i - 1][j] + 1).min(row[j - 1] + 1).min(rows[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                row[j] = row[j].min(rows[i - 2][j - 2] + 1);
+            }
+        }
+        rows.push(row);
+    }
+    rows[a.len()][b.len()]
+}
+
+/// The line (from 1) of byte `offset` in `text`.
+fn line_of(text: &str, offset: usize) -> usize {
+    text.as_bytes().iter().take(offset).filter(|&&b| b == b'\n').count() + 1
+}
+
+/// The line (from 1) where `key` is set, at the top level (`table` = None) or in `[table]`.
+fn key_line(text: &str, table: Option<&str>, key: &str) -> Option<usize> {
+    let mut current = None;
+    for (i, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if let Some(name) = line.strip_prefix('[').and_then(|l| l.strip_suffix(']')) {
+            current = Some(name.trim());
+        } else if current == table && line.strip_prefix(key).is_some_and(|rest| rest.trim_start().starts_with('=')) {
+            return Some(i + 1);
+        }
+    }
+    None
 }
 
 /// Writes every setting into the file, keeping its comments and layout
 /// (missing keys are added). Used by the settings window.
-pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Write`] when the file cannot be written.
+pub fn save(path: &Path, cfg: &Config) -> Result<(), ConfigError> {
     let mut text = fs::read_to_string(path).unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
     let str_value = |s: &str| {
         let mut out = String::from("\"");
@@ -322,10 +557,11 @@ pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
 }
 
 /// Writes then renames, so the dock and the settings window never read a half-written file.
-fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
+fn write_atomically(path: &Path, text: &str) -> Result<(), ConfigError> {
     let tmp = path.with_extension("toml.tmp");
-    fs::write(&tmp, text)?;
-    fs::rename(tmp, path)
+    fs::write(&tmp, text)
+        .and_then(|()| fs::rename(tmp, path))
+        .map_err(|error| ConfigError::Write { path: path.to_path_buf(), error })
 }
 
 /// Sets a single-line `key = value` in the top level (`table` = None) or in `[table]`.
@@ -370,7 +606,11 @@ fn set_value(text: &str, table: Option<&str>, key: &str, value: &str) -> String 
 }
 
 /// Rewrites only the `pinned = [...]` entry of the file, keeping the user's comments.
-pub fn save_pinned(path: &Path, pinned: &[String]) -> std::io::Result<()> {
+///
+/// # Errors
+///
+/// Returns [`ConfigError::Write`] when the file cannot be written.
+pub fn save_pinned(path: &Path, pinned: &[String]) -> Result<(), ConfigError> {
     let text = fs::read_to_string(path).unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
     write_atomically(path, &replace_pinned(&text, pinned))
 }
@@ -423,6 +663,88 @@ mod tests {
     fn default_file_matches_defaults() {
         let parsed: Config = toml::from_str(DEFAULT_CONFIG).unwrap();
         assert_eq!(parsed, Config::default());
+        assert_eq!(parse(DEFAULT_CONFIG), Loaded { config: Config::default(), warnings: Vec::new() });
+    }
+
+    #[test]
+    fn every_setting_has_a_key() {
+        let table: toml::Table = DEFAULT_CONFIG.parse().unwrap();
+        let keys: Vec<&str> = table.keys().map(String::as_str).collect();
+        let mut expected = KEYS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+        let colors: Vec<&str> = table["colors"].as_table().unwrap().keys().map(String::as_str).collect();
+        let mut expected = COLOR_KEYS.to_vec();
+        expected.sort_unstable();
+        assert_eq!(colors, expected);
+    }
+
+    fn messages(text: &str) -> (Config, Vec<String>) {
+        let loaded = parse(text);
+        (loaded.config, loaded.warnings.iter().map(ToString::to_string).collect())
+    }
+
+    #[test]
+    fn one_bad_setting_keeps_the_others() {
+        let text = "position = \"bottom\"\nicon_sise = 64\nautohide = \"yes\"\nfont_size = 15.0\n\
+                    click_action = \"open\"\n\n[colors]\ntext = \"#000000\"\nhover = \"red\"\nshadow = \"#000\"\n";
+        let (cfg, warnings) = messages(text);
+        assert_eq!((cfg.position, cfg.font_size, cfg.colors.text), (Position::Bottom, 15.0, Color::rgba(0, 0, 0, 255)));
+        assert_eq!((cfg.autohide, cfg.click_action), (false, ClickAction::MinimizeOrCycle), "defaults");
+        assert_eq!(cfg.colors.hover, Colors::default().hover);
+        assert_eq!(warnings.len(), 5, "{warnings:#?}");
+        assert_eq!(warnings[0], "line 2: unknown setting \"icon_sise\". Did you mean \"icon_size\"?");
+        assert!(warnings[1].starts_with("line 3: invalid value for \"autohide\""), "{}", warnings[1]);
+        assert!(warnings[2].starts_with("line 5: invalid value for \"click_action\""), "{}", warnings[2]);
+        assert!(warnings[3].starts_with("line 9: invalid value for \"colors.hover\""), "{}", warnings[3]);
+        assert_eq!(warnings[4], "line 10: unknown setting \"colors.shadow\"");
+    }
+
+    #[test]
+    fn values_out_of_range_are_brought_back() {
+        let (cfg, warnings) = messages("icon_size = 1000\ncorner_radius = nan\nspacing = 3\n");
+        assert_eq!((cfg.icon_size, cfg.corner_radius, cfg.spacing), (256, 0.0, 3));
+        assert_eq!(
+            warnings,
+            [
+                "line 1: icon_size = 1000 is out of range (16 to 256); using 256",
+                "line 2: corner_radius = NaN is out of range (0 to 128); using 0",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_toml_gives_the_defaults() {
+        let (cfg, warnings) = messages("icon_size = 32\nposition = \"left\n");
+        assert_eq!(cfg, Config::default());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("line 2: "), "{warnings:?}");
+        assert!(warnings[0].ends_with("; using the default settings"), "{warnings:?}");
+        let (_, warnings) = messages("colors = 3\n");
+        assert_eq!(warnings, ["line 1: colors must be a table: [colors]"]);
+    }
+
+    #[test]
+    fn keys_are_found_in_their_table() {
+        let text = "# text = 1\ntext=2\n[colors]\n  text = \"#fff\"\n";
+        assert_eq!(key_line(text, None, "text"), Some(2));
+        assert_eq!(key_line(text, Some("colors"), "text"), Some(4));
+        assert_eq!(key_line(text, None, "missing"), None);
+        assert_eq!(line_of("a\nb\nc", 4), 3);
+    }
+
+    #[test]
+    fn a_missing_file_is_created_from_the_defaults() {
+        let dir = std::env::temp_dir().join(format!("dockling-load-{}", std::process::id()));
+        let path = dir.join("sub/config.toml");
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.config, Config::default());
+        assert!(path.is_file());
+        fs::remove_dir_all(&dir).unwrap();
+        // A directory where the file should be cannot be read.
+        fs::create_dir_all(&path).unwrap();
+        assert!(matches!(load(&path), Err(ConfigError::Read { .. })));
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

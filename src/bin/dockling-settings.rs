@@ -40,14 +40,22 @@ impl State {
     fn save_now(&self) {
         // Pins may have been dragged or toggled in the dock meanwhile: keep those.
         if !self.pinned_changed.replace(false) {
-            self.cfg.borrow_mut().pinned = config::load(&self.path).pinned;
+            self.cfg.borrow_mut().pinned = load(&self.path).config.pinned;
         }
         if let Err(e) = config::save(&self.path, &self.cfg.borrow()) {
-            eprintln!("dockling-settings: cannot save {}: {e}", self.path.display());
+            eprintln!("dockling-settings: {e}");
             return;
         }
         run_dock(&["--reload"]);
     }
+}
+
+/// The configuration at `path`, the defaults when it cannot be read.
+fn load(path: &std::path::Path) -> config::Loaded {
+    config::load(path).unwrap_or_else(|e| {
+        eprintln!("dockling-settings: {e}");
+        config::Loaded { config: Config::default(), warnings: Vec::new() }
+    })
 }
 
 /// Runs the `dockling` installed next to this program (or found in PATH).
@@ -73,7 +81,7 @@ fn build_window(app: &gtk::Application) {
     }
     let path = config::config_path();
     let state = Rc::new(State {
-        cfg: RefCell::new(config::load(&path)),
+        cfg: RefCell::new(load(&path).config),
         path,
         apps: RefCell::new(desktop::load_apps()),
         pending: RefCell::new(None),
@@ -371,7 +379,7 @@ fn pinned_page(state: &Rc<State>) -> gtk::Widget {
         state,
         move |_| {
             if state.pending.borrow().is_none() {
-                state.cfg.borrow_mut().pinned = config::load(&state.path).pinned;
+                state.cfg.borrow_mut().pinned = load(&state.path).config.pinned;
                 refresh_pinned(&list, &state);
             }
         }
