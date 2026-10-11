@@ -33,10 +33,10 @@ gtk = { version = "0.19", optional = true, features = ["v3_24"] }
 resvg = { version = "0.48", default-features = false, optional = true }
 rustix = { version = "1", default-features = false, features = ["std", "event"] }
 serde = { version = "1", features = ["derive"] }
+skrifa = { version = "0.48", default-features = false, features = ["std"] }
 thiserror = "2"
 tiny-skia = { version = "0.12", default-features = false, features = ["std", "simd", "png-format"] }
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
-ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 x11rb = { version = "0.14", features = ["randr", "image"] }
 
 [profile.release]
