@@ -66,6 +66,8 @@ jobs:
         run: |
           mkdir dist
           cp target/debian/*.deb dist/
+          # The same package under a name that does not change, for the install instructions.
+          cp target/debian/*.deb dist/dockling_amd64.deb
           tar czf "dist/dockling-v${VERSION}-x86_64-linux.tar.gz" \
             -C target/release dockling dockling-settings \
             -C "$GITHUB_WORKSPACE" README.md LICENSE config/default.toml data/dockling.desktop \
