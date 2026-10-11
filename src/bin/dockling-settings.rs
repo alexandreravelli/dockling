@@ -80,8 +80,9 @@ fn build_window(app: &gtk::Application) {
         return;
     }
     let path = config::config_path();
+    let loaded = load(&path);
     let state = Rc::new(State {
-        cfg: RefCell::new(load(&path).config),
+        cfg: RefCell::new(loaded.config),
         path,
         apps: RefCell::new(desktop::load_apps()),
         pending: RefCell::new(None),
@@ -103,7 +104,12 @@ fn build_window(app: &gtk::Application) {
     header.pack_start(&reset);
     window.set_titlebar(Some(&header));
     window.set_title("Dock Settings");
-    window.add(&stack);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    if let Some(bar) = problems_bar(&state.path, &loaded.warnings) {
+        content.pack_start(&bar, false, false, 0);
+    }
+    content.pack_start(&stack, true, true, 0);
+    window.add(&content);
     fill_stack(&stack, &state);
 
     reset.connect_clicked(glib::clone!(
@@ -139,6 +145,27 @@ fn build_window(app: &gtk::Application) {
         }
     ));
     window.show_all();
+}
+
+/// A bar that lists the problems of the configuration file, or None when it has none.
+fn problems_bar(path: &std::path::Path, warnings: &[config::Warning]) -> Option<gtk::InfoBar> {
+    if warnings.is_empty() {
+        return None;
+    }
+    let title = if warnings.len() == 1 { "A problem" } else { "Problems" };
+    let items: Vec<String> =
+        warnings.iter().map(|w| format!("• {}", glib::markup_escape_text(&w.to_string()))).collect();
+    let text = format!(
+        "<b>{title} in {}</b>\n{}\nThe dock skips these settings. Any change saved here writes valid values for \
+         them; unknown keys stay in the file until you remove them.",
+        glib::markup_escape_text(&path.display().to_string()),
+        items.join("\n"),
+    );
+    let label = gtk::Label::builder().label(text).use_markup(true).wrap(true).xalign(0.0).build();
+    let bar = gtk::InfoBar::builder().message_type(gtk::MessageType::Warning).show_close_button(true).build();
+    bar.content_area().add(&label);
+    bar.connect_response(|bar, _| bar.hide());
+    Some(bar)
 }
 
 fn confirm_reset(window: &gtk::ApplicationWindow) -> bool {
