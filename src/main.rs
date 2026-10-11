@@ -5,6 +5,7 @@ mod icons;
 mod text;
 
 use dockling::{config, desktop};
+use std::process::ExitCode;
 
 const HELP: &str = "\
 Dockling - an ultra-lightweight application dock for X11
@@ -23,7 +24,7 @@ Options:
 
 Configuration: ~/.config/dockling/config.toml (created on first start)";
 
-fn main() {
+fn main() -> ExitCode {
     let arg = std::env::args().nth(1);
     let result = match arg.as_deref() {
         None => dock::run(false),
@@ -48,11 +49,14 @@ fn main() {
         }
         Some(other) => {
             eprintln!("dockling: unknown option {other}\n\n{HELP}");
-            std::process::exit(2);
+            return ExitCode::from(2);
         }
     };
-    if let Err(e) = result {
-        eprintln!("dockling: {e}");
-        std::process::exit(1);
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("dockling: {e:#}");
+            ExitCode::FAILURE
+        }
     }
 }

@@ -4,9 +4,9 @@ use crate::config::{self, ClickAction, Color, Config, Position};
 use crate::desktop::{self, App};
 use crate::icons::{self, IconFinder};
 use crate::text::Text;
+use anyhow::{Context, bail};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::error::Error;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -21,7 +21,12 @@ use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{CURRENT_TIME, NONE};
 
-pub type Res<T> = Result<T, Box<dyn Error>>;
+pub type Res<T> = anyhow::Result<T>;
+
+/// Connects to the X server of `$DISPLAY`.
+fn connect() -> Res<(RustConnection, usize)> {
+    x11rb::connect(None).context("cannot connect to the X server (Dockling needs an X11 session; is DISPLAY set?)")
+}
 
 pub const CMD_RELOAD: u32 = 1;
 pub const CMD_QUIT: u32 = 2;
@@ -183,10 +188,10 @@ fn selection_atom(conn: &RustConnection, screen: usize) -> Res<Atom> {
 
 /// Sends a command (reload/quit) to the running dock.
 pub fn send_command(cmd: u32) -> Res<()> {
-    let (conn, screen) = x11rb::connect(None)?;
+    let (conn, screen) = connect()?;
     let owner = conn.get_selection_owner(selection_atom(&conn, screen)?)?.reply()?.owner;
     if owner == NONE {
-        return Err("Dockling is not running".into());
+        bail!("Dockling is not running");
     }
     let atom = intern(&conn, "_DOCKLING_COMMAND")?;
     let ev = ClientMessageEvent::new(32, owner, atom, [cmd, 0, 0, 0, 0]);
@@ -225,13 +230,13 @@ fn argb_visual(screen: &Screen) -> Option<Visualid> {
 }
 
 pub fn run(replace: bool) -> Res<()> {
-    let (conn, screen_num) = x11rb::connect(None)?;
+    let (conn, screen_num) = connect()?;
     let screen = conn.setup().roots[screen_num].clone();
     let root = screen.root;
     let atoms = Atoms::new(&conn)?.reply()?;
     let selection = selection_atom(&conn, screen_num)?;
     if conn.get_selection_owner(selection)?.reply()?.owner != NONE && !replace {
-        return Err("Dockling is already running (use --replace to replace it)".into());
+        bail!("Dockling is already running (use --replace to replace it)");
     }
 
     // Use a 32-bit visual for real transparency when a compositor is running.
@@ -294,7 +299,7 @@ pub fn run(replace: bool) -> Res<()> {
 
     conn.set_selection_owner(win, selection, CURRENT_TIME)?;
     if conn.get_selection_owner(selection)?.reply()?.owner != win {
-        return Err("could not become the dock owner".into());
+        bail!("could not become the dock owner: another dock started at the same time");
     }
     conn.change_window_attributes(
         root,
