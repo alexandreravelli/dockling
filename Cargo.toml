@@ -10,6 +10,19 @@ repository = "https://github.com/alexandreravelli/dockling"
 homepage = "https://github.com/alexandreravelli/dockling"
 keywords = ["dock", "x11", "xfce", "launcher", "taskbar"]
 categories = ["gui"]
+documentation = "https://docs.rs/dockling"
+# What crates.io gets: the sources, the tests and the files the build or the Makefile use.
+include = [
+    "/src",
+    "/tests",
+    "/config/default.toml",
+    "/data",
+    "/docs/logo.svg",
+    "/Makefile",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 [features]
 default = ["svg", "settings"]
@@ -17,6 +30,11 @@ default = ["svg", "settings"]
 svg = ["dep:resvg"]
 # The `dockling-settings` window (GTK 3, already present on XFCE desktops).
 settings = ["dep:gtk"]
+
+# docs.rs documents the library, which needs neither GTK nor X11.
+[package.metadata.docs.rs]
+no-default-features = true
+features = ["svg"]
 
 [[bin]]
 name = "dockling"
