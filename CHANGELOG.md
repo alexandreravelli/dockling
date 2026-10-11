@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/alexandreravelli/dockling/compare/v0.2.1...v0.3.0) - 2026-10-11
+
+### Added
+
+- *(settings)* show the problems of the configuration file
+- *(cli)* add --check-config
+- *(config)* [**breaking**] keep the valid settings when one is wrong
+
+### Changed
+
+- *(text)* draw text with skrifa instead of the unmaintained ttf-parser
+- report the dock's errors with anyhow and context
+
+### Documentation
+
+- *(readme)* crates.io install, --check-config and how to contribute
+- use the Keep a Changelog format
+- document the library API with tested examples
+
+### Fixed
+
+- *(config)* save pinned apps atomically
+- *(config)* reject non-ASCII colors instead of panicking
+
 ## [0.2.1](https://github.com/alexandreravelli/dockling/compare/v0.2.0...v0.2.1) - 2026-10-10
 
 ### Changed
