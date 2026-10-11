@@ -61,7 +61,12 @@ fn icon_bases() -> Vec<PathBuf> {
 impl IconFinder {
     /// `theme` is the preferred theme; Adwaita and hicolor are always searched after it.
     pub fn new(theme: &str) -> Self {
-        let bases = icon_bases();
+        IconFinder::with_bases(theme, icon_bases(), PathBuf::from("/usr/share/pixmaps"))
+    }
+
+    /// Like [`IconFinder::new`], searching `bases` (directories that hold themes) and
+    /// `pixmaps` instead of the XDG directories.
+    fn with_bases(theme: &str, bases: Vec<PathBuf>, pixmaps: PathBuf) -> Self {
         let first = if theme.is_empty() { "Adwaita".to_string() } else { theme.to_string() };
 
         let mut themes = Vec::new();
@@ -90,7 +95,7 @@ impl IconFinder {
             themes.push(hicolor);
         }
 
-        let mut pixmaps = vec![PathBuf::from("/usr/share/pixmaps")];
+        let mut pixmaps = vec![pixmaps];
         pixmaps.extend(bases);
         IconFinder { themes, pixmaps }
     }
@@ -314,7 +319,10 @@ pub fn xsettings_icon_theme(data: &[u8]) -> Option<String> {
 
 /// Fallback when xfsettingsd is not running: XFCE's saved xsettings channel.
 pub fn xfconf_icon_theme() -> Option<String> {
-    let path = home_dir().join(".config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml");
+    xfconf_icon_theme_in(&home_dir().join(".config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml"))
+}
+
+fn xfconf_icon_theme_in(path: &Path) -> Option<String> {
     let xml = fs::read_to_string(path).ok()?;
     let line = xml.lines().find(|l| l.contains("name=\"IconThemeName\""))?;
     let value = line.split("value=\"").nth(1)?.split('"').next()?;
@@ -342,5 +350,128 @@ mod tests {
         d.extend_from_slice(&8u32.to_le_bytes());
         d.extend_from_slice(b"elementa");
         assert_eq!(xsettings_icon_theme(&d).as_deref(), Some("elementa"));
+        // Truncated data and unknown setting types are refused, not read past their end.
+        assert_eq!(xsettings_icon_theme(&d[..d.len() - 4]), None);
+        assert_eq!(xsettings_icon_theme(&[0, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 9, 0, 1, 0]), None);
+        assert_eq!(xsettings_icon_theme(&[]), None);
+    }
+
+    /// A 16x16 opaque PNG.
+    fn png() -> Vec<u8> {
+        let mut pm = Pixmap::new(16, 16).unwrap();
+        pm.fill(tiny_skia::Color::from_rgba8(200, 30, 30, 255));
+        pm.encode_png().unwrap()
+    }
+
+    /// Two themes under `base`: "Mine" (16 and 48 px, inherits "Parent") and "Parent"
+    /// (scalable), plus hicolor.
+    fn themes(base: &Path) {
+        let write = |rel: &str, data: &[u8]| {
+            let path = base.join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, data).unwrap();
+        };
+        write(
+            "Mine/index.theme",
+            b"[Icon Theme]\nName=Mine\nInherits=Parent\nDirectories=16x16/apps,48x48/apps,48x48@2/apps\n\
+              [16x16/apps]\nSize=16\nType=Fixed\n[48x48/apps]\nSize=48\nType=Threshold\n\
+              [48x48@2/apps]\nSize=48\nScale=2\n",
+        );
+        write("Mine/16x16/apps/small.png", &png());
+        write("Mine/48x48/apps/small.png", &png());
+        write("Mine/16x16/apps/only16.png", &png());
+        write(
+            "Parent/index.theme",
+            b"[Icon Theme]\nName=Parent\nDirectories=scalable/apps\n[scalable/apps]\nSize=64\nMinSize=8\nMaxSize=512\nType=Scalable\n",
+        );
+        write("Parent/scalable/apps/vector.svg", br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="blue"/></svg>"#);
+        write("hicolor/index.theme", b"[Icon Theme]\nName=Hicolor\nDirectories=48x48/apps\n[48x48/apps]\nSize=48\n");
+        write("hicolor/48x48/apps/fallback.png", &png());
+    }
+
+    #[test]
+    fn finds_icons_by_size_theme_and_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        themes(dir.path());
+        let pixmaps = dir.path().join("pixmaps");
+        fs::create_dir_all(&pixmaps).unwrap();
+        fs::write(pixmaps.join("legacy.png"), png()).unwrap();
+        let finder = IconFinder::with_bases("Mine", vec![dir.path().to_path_buf()], pixmaps.clone());
+        let rel = |p: Option<PathBuf>| p.map(|p| p.strip_prefix(dir.path()).unwrap().to_string_lossy().into_owned());
+        // The closest size wins; a name with an extension is the same icon.
+        assert_eq!(rel(finder.find("small", 48)).as_deref(), Some("Mine/48x48/apps/small.png"));
+        assert_eq!(rel(finder.find("small.png", 16)).as_deref(), Some("Mine/16x16/apps/small.png"));
+        assert_eq!(rel(finder.find("only16", 48)).as_deref(), Some("Mine/16x16/apps/only16.png"));
+        // Inherited theme, then hicolor, then the pixmaps directory.
+        #[cfg(feature = "svg")]
+        assert_eq!(rel(finder.find("vector", 48)).as_deref(), Some("Parent/scalable/apps/vector.svg"));
+        #[cfg(not(feature = "svg"))]
+        assert_eq!(finder.find("vector", 48), None, "SVG icons are skipped without the svg feature");
+        assert_eq!(rel(finder.find("fallback", 48)).as_deref(), Some("hicolor/48x48/apps/fallback.png"));
+        assert_eq!(rel(finder.find("legacy", 48)).as_deref(), Some("pixmaps/legacy.png"));
+        assert_eq!(finder.find("missing", 48), None);
+        assert_eq!(finder.find("", 48), None);
+        // An absolute path is used as it is, when it exists.
+        let abs = pixmaps.join("legacy.png");
+        assert_eq!(finder.find(&abs.to_string_lossy(), 48), Some(abs));
+        assert_eq!(finder.find("/no/such/icon.png", 48), None);
+        assert_eq!(finder.themes.last().and_then(|t| t.roots.first()).map(|r| r.ends_with("hicolor")), Some(true));
+    }
+
+    #[test]
+    fn theme_directories_measure_their_distance() {
+        let dir = |kind, size, min, max| ThemeDir { sub: String::new(), size, min, max, threshold: 2, kind };
+        assert_eq!(dir(DirKind::Fixed, 48, 48, 48).distance(32), 16);
+        assert_eq!(dir(DirKind::Scalable, 64, 16, 256).distance(8), 8);
+        assert_eq!(dir(DirKind::Scalable, 64, 16, 256).distance(300), 44);
+        assert_eq!(dir(DirKind::Scalable, 64, 16, 256).distance(48), 0);
+        assert_eq!(dir(DirKind::Threshold, 48, 48, 48).distance(47), 0);
+        assert_eq!(dir(DirKind::Threshold, 48, 48, 48).distance(32), 16);
+        assert_eq!(dir(DirKind::Threshold, 48, 48, 48).distance(64), 16);
+    }
+
+    #[test]
+    fn loads_png_and_svg_icons_at_the_requested_size() {
+        let dir = tempfile::tempdir().unwrap();
+        themes(dir.path());
+        let png_icon = load_icon(&dir.path().join("Mine/16x16/apps/small.png"), 32).unwrap();
+        assert_eq!((png_icon.width(), png_icon.height()), (32, 32));
+        assert_eq!(png_icon.pixel(16, 16).map(tiny_skia::PremultipliedColorU8::red), Some(200));
+        #[cfg(feature = "svg")]
+        {
+            let svg = load_icon(&dir.path().join("Parent/scalable/apps/vector.svg"), 24).unwrap();
+            assert_eq!(svg.pixel(12, 12).map(|p| (p.blue(), p.alpha())), Some((255, 255)));
+        }
+        // Unreadable, broken or fully transparent icons give nothing.
+        let empty = dir.path().join("empty.svg");
+        fs::write(&empty, r#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"></svg>"#).unwrap();
+        assert!(load_icon(&empty, 24).is_none());
+        fs::write(dir.path().join("broken.png"), b"not a png").unwrap();
+        assert!(load_icon(&dir.path().join("broken.png"), 24).is_none());
+        assert!(load_icon(&dir.path().join("missing.png"), 24).is_none());
+    }
+
+    #[test]
+    fn picks_the_closest_window_icon() {
+        // A 2x2 red image and a 4x4 blue one.
+        let mut data = vec![2, 2];
+        data.extend([0xffff_0000; 4]);
+        data.extend([4, 4]);
+        data.extend([0xff00_00ff; 16]);
+        let icon = from_net_wm_icon(&data, 4).unwrap();
+        assert_eq!(icon.pixel(1, 1).map(|p| (p.red(), p.blue())), Some((0, 255)));
+        assert!(from_net_wm_icon(&[16, 16, 0xffff_ffff], 16).is_none(), "truncated");
+        assert!(from_net_wm_icon(&[], 16).is_none());
+    }
+
+    #[test]
+    fn reads_the_xfce_icon_theme() {
+        let dir = tempfile::tempdir().unwrap();
+        let xml = dir.path().join("xsettings.xml");
+        fs::write(&xml, "<channel>\n  <property name=\"IconThemeName\" type=\"string\" value=\"elementary-xfce-dark\"/>\n</channel>\n").unwrap();
+        assert_eq!(xfconf_icon_theme_in(&xml).as_deref(), Some("elementary-xfce-dark"));
+        fs::write(&xml, "<property name=\"IconThemeName\" type=\"string\" value=\"\"/>").unwrap();
+        assert_eq!(xfconf_icon_theme_in(&xml), None);
+        assert_eq!(xfconf_icon_theme_in(&dir.path().join("missing.xml")), None);
     }
 }
