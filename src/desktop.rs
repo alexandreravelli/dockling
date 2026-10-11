@@ -1,19 +1,25 @@
-//! Minimal `.desktop` file reader (freedesktop Desktop Entry spec).
+//! Minimal `.desktop` file reader (freedesktop Desktop Entry specification): finds the
+//! installed applications and matches windows to them.
 
 use crate::config::home_dir;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// An application, from its desktop entry.
 #[derive(Debug, Clone)]
 pub struct App {
     /// Desktop file id without the ".desktop" suffix, e.g. "org.xfce.mousepad".
     pub id: String,
+    /// Name shown in tooltips and menus.
     pub name: String,
+    /// The command line, split into arguments, field codes expanded or dropped.
     pub exec: Vec<String>,
+    /// Icon name from the icon theme, or a path.
     pub icon: String,
     /// Lowercased `StartupWMClass`, empty when absent.
     pub wm_class: String,
+    /// Runs in a terminal (`Terminal=true`).
     pub terminal: bool,
     /// Hidden from menus (NoDisplay=true); still used to recognize windows.
     pub no_display: bool,
@@ -48,6 +54,8 @@ pub fn data_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// Every application of the XDG data directories, the user's first. An id found again in a
+/// later directory is ignored, even when the first entry is hidden.
 #[must_use]
 pub fn load_apps() -> Vec<App> {
     let mut apps = Vec::new();
@@ -81,6 +89,8 @@ fn scan(dir: &Path, prefix: &str, apps: &mut Vec<App>, seen: &mut HashSet<String
     }
 }
 
+/// Reads the desktop entry at `path`, whose desktop file id is `id`. None for unreadable files,
+/// entries that are not applications, hidden ones and those without a command.
 #[must_use]
 pub fn parse(path: &Path, id: String) -> Option<App> {
     let text = fs::read_to_string(path).ok()?;

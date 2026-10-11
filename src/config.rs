@@ -1,4 +1,16 @@
-//! Configuration file handling (`~/.config/dockling/config.toml`).
+//! The configuration file, `~/.config/dockling/config.toml`: reading it, checking it and
+//! writing it back without losing its comments.
+//!
+//! ```
+//! use dockling::config::{self, Position};
+//!
+//! let loaded = config::parse("position = \"bottom\"\n[colors]\nindicator = \"#3584e4\"\n");
+//! assert!(loaded.warnings.is_empty());
+//! assert_eq!(loaded.config.position, Position::Bottom);
+//! assert_eq!(loaded.config.colors.indicator.to_hex(), "#3584e4");
+//! // Everything else keeps its default value.
+//! assert_eq!(loaded.config.icon_size, 48);
+//! ```
 
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -11,18 +23,32 @@ use std::path::{Path, PathBuf};
 /// The documented default configuration, written on first start.
 pub const DEFAULT_CONFIG: &str = include_str!("../config/default.toml");
 
+/// The screen edge the dock sits on.
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Position {
+    /// Along the left edge, as on Ubuntu.
     Left,
+    /// Along the right edge.
     Right,
+    /// Along the bottom edge.
     Bottom,
+    /// Along the top edge.
     Top,
 }
 
 impl Position {
+    /// Every position, in the order the settings window lists them.
     pub const ALL: [Position; 4] = [Position::Left, Position::Right, Position::Bottom, Position::Top];
 
+    /// True for the bottom and top edges, where icons are in a row.
+    ///
+    /// ```
+    /// use dockling::config::Position;
+    ///
+    /// assert!(Position::Bottom.horizontal());
+    /// assert!(!Position::Left.horizontal());
+    /// ```
     #[must_use]
     pub fn horizontal(self) -> bool {
         matches!(self, Position::Bottom | Position::Top)
@@ -40,10 +66,14 @@ impl Position {
     }
 }
 
+/// What a left click does on a running application.
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum ClickAction {
+    /// Focus it; when it is focused already, minimize it (one window) or switch to its next
+    /// window (several windows).
     MinimizeOrCycle,
+    /// Focus it; when it is focused already, switch to its next window.
     Cycle,
 }
 
@@ -58,13 +88,28 @@ impl ClickAction {
     }
 }
 
-/// Premultiplication happens at draw time; this is a straight RGBA color.
+/// A straight (not premultiplied) RGBA color, written `"#RRGGBB"` or `"#RRGGBBAA"` in the file.
+///
+/// ```
+/// use dockling::config::Color;
+///
+/// let color = Color::try_from("#ff800080".to_string())?;
+/// assert_eq!((color.r, color.g, color.b, color.a), (255, 128, 0, 128));
+/// assert_eq!(color.to_hex(), "#ff800080");
+/// assert_eq!(color.opaque().to_hex(), "#ff8000");
+/// assert!(Color::try_from("orange".to_string()).is_err());
+/// # Ok::<(), String>(())
+/// ```
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(try_from = "String")]
 pub struct Color {
+    /// Red.
     pub r: u8,
+    /// Green.
     pub g: u8,
+    /// Blue.
     pub b: u8,
+    /// Opacity: 0 is transparent, 255 opaque.
     pub a: u8,
 }
 
@@ -97,11 +142,13 @@ impl Color {
         Color { r, g, b, a }
     }
 
+    /// The same color for tiny-skia.
     #[must_use]
     pub fn skia(self) -> tiny_skia::Color {
         tiny_skia::Color::from_rgba8(self.r, self.g, self.b, self.a)
     }
 
+    /// The same color, fully opaque (for drawing without a compositor).
     #[must_use]
     pub fn opaque(self) -> Self {
         Color { a: 255, ..self }
@@ -115,18 +162,29 @@ impl Color {
     }
 }
 
+/// The `[colors]` table.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct Colors {
+    /// The dock's background.
     pub background: Color,
+    /// The highlight behind the icon under the pointer.
     pub hover: Color,
+    /// The highlight behind the focused application.
     pub active: Color,
+    /// The dots that count an application's windows.
     pub indicator: Color,
+    /// The dots of an application that asks for attention.
     pub attention: Color,
+    /// Tooltip and menu text.
     pub text: Color,
+    /// The tooltips' background.
     pub tooltip_background: Color,
+    /// The menus' background.
     pub menu_background: Color,
+    /// The highlight of the menu entry under the pointer.
     pub menu_hover: Color,
+    /// The dots of the "Show Applications" button.
     pub apps_button: Color,
 }
 
@@ -147,31 +205,54 @@ impl Default for Colors {
     }
 }
 
+/// Every setting of the dock. [`Config::default`] gives the values of the default file.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 #[expect(clippy::struct_excessive_bools, reason = "each bool is an independent on/off setting of the file")]
 pub struct Config {
+    /// The screen edge the dock sits on.
     pub position: Position,
+    /// Icon size in pixels (16 to 256); icons shrink when the dock is full.
     pub icon_size: u32,
+    /// Space around each icon inside its cell, in pixels (up to 64).
     pub icon_padding: u32,
+    /// Space between cells, in pixels (up to 64).
     pub spacing: u32,
+    /// Space along the dock's ends, in pixels (up to 64).
     pub margin: u32,
+    /// Span the whole screen edge; else the dock is as long as its content, centered.
     pub extend: bool,
+    /// Corner radius of the highlights, and of the dock when it does not span the edge (0 to 128).
     pub corner_radius: f32,
+    /// Reserve screen space so maximized windows stop at the dock.
     pub reserve_space: bool,
+    /// Hide the dock when the pointer leaves it (no space is reserved then).
     pub autohide: bool,
+    /// How long the dock waits before hiding, in milliseconds.
     pub autohide_delay_ms: u64,
+    /// Show the running applications that are not pinned.
     pub show_running: bool,
+    /// Show the "Show Applications" button.
     pub show_apps_button: bool,
+    /// Put that button first instead of last.
     pub apps_button_at_start: bool,
+    /// The shell command the "Show Applications" button runs.
     pub apps_command: String,
+    /// What a left click does on a running application.
     pub click_action: ClickAction,
+    /// Icon theme name; empty for the desktop's theme.
     pub icon_theme: String,
+    /// Path of the tooltip and menu font; empty to let fontconfig choose.
     pub font: String,
+    /// Font size in pixels (6 to 72).
     pub font_size: f32,
+    /// Show the application's name when the pointer rests on its icon.
     pub tooltips: bool,
+    /// Terminal for applications that run in one (`Terminal=true`).
     pub terminal: String,
+    /// Pinned applications, in order: desktop file ids, short names or `.desktop` paths.
     pub pinned: Vec<String>,
+    /// The colors.
     pub colors: Colors,
 }
 
@@ -327,6 +408,8 @@ pub struct Loaded {
     pub warnings: Vec<Warning>,
 }
 
+/// The user's configuration file: `$XDG_CONFIG_HOME/dockling/config.toml`, by default
+/// `~/.config/dockling/config.toml`.
 pub fn config_path() -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
@@ -342,6 +425,7 @@ fn system_config() -> Option<String> {
         .find_map(|d| fs::read_to_string(Path::new(d).join("dockling/config.toml")).ok())
 }
 
+/// The user's home directory, from `HOME` (`/` when it is not set).
 pub fn home_dir() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
