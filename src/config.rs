@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use std::cmp::Ordering;
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -23,11 +23,13 @@ pub enum Position {
 impl Position {
     pub const ALL: [Position; 4] = [Position::Left, Position::Right, Position::Bottom, Position::Top];
 
+    #[must_use]
     pub fn horizontal(self) -> bool {
         matches!(self, Position::Bottom | Position::Top)
     }
 
     /// The value used in the config file.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Position::Left => "left",
@@ -47,6 +49,7 @@ pub enum ClickAction {
 
 impl ClickAction {
     /// The value used in the config file.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             ClickAction::MinimizeOrCycle => "minimize-or-cycle",
@@ -94,15 +97,18 @@ impl Color {
         Color { r, g, b, a }
     }
 
+    #[must_use]
     pub fn skia(self) -> tiny_skia::Color {
         tiny_skia::Color::from_rgba8(self.r, self.g, self.b, self.a)
     }
 
+    #[must_use]
     pub fn opaque(self) -> Self {
         Color { a: 255, ..self }
     }
 
     /// "#rrggbb", or "#rrggbbaa" when not fully opaque.
+    #[must_use]
     pub fn to_hex(self) -> String {
         let rgb = format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b);
         if self.a == 255 { rgb } else { format!("{rgb}{:02x}", self.a) }
@@ -143,6 +149,7 @@ impl Default for Colors {
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(default, deny_unknown_fields)]
+#[expect(clippy::struct_excessive_bools, reason = "each bool is an independent on/off setting of the file")]
 pub struct Config {
     pub position: Position,
     pub icon_size: u32,
@@ -323,12 +330,11 @@ pub struct Loaded {
 pub fn config_path() -> PathBuf {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .unwrap_or_else(|| home_dir().join(".config"));
+        .map_or_else(|| home_dir().join(".config"), PathBuf::from);
     base.join("dockling").join("config.toml")
 }
 
-/// The first `dockling/config.toml` found in $XDG_CONFIG_DIRS (default /etc/xdg).
+/// The first `dockling/config.toml` found in $`XDG_CONFIG_DIRS` (default /etc/xdg).
 fn system_config() -> Option<String> {
     let dirs = std::env::var("XDG_CONFIG_DIRS").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "/etc/xdg".into());
     dirs.split(':')
@@ -337,7 +343,7 @@ fn system_config() -> Option<String> {
 }
 
 pub fn home_dir() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("/"))
+    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
 /// Loads the configuration at `path`. When the file does not exist it is created from the
@@ -398,14 +404,14 @@ pub fn parse(text: &str) -> Loaded {
                 let mut ok = toml::Table::new();
                 for (name, value) in colors {
                     let line = key_line(text, Some("colors"), &name);
-                    accept::<Colors>(&mut ok, name, value, &COLOR_KEYS, "colors.", line, &mut warnings);
+                    accept::<Colors>(&mut ok, &name, value, &COLOR_KEYS, "colors.", line, &mut warnings);
                 }
                 accepted.insert(key, toml::Value::Table(ok));
             }
             ("colors", _) => {
                 warnings.push(Warning { line, message: "colors must be a table: [colors]".into() });
             }
-            (_, value) => accept::<Config>(&mut accepted, key, value, &KEYS, "", line, &mut warnings),
+            (_, value) => accept::<Config>(&mut accepted, &key, value, &KEYS, "", line, &mut warnings),
         }
     }
     // Each accepted value deserialized on its own, so together they do too.
@@ -419,15 +425,15 @@ pub fn parse(text: &str) -> Loaded {
 /// Adds `key = value` to `accepted` when `T` takes it, else reports why it is skipped.
 fn accept<T: DeserializeOwned>(
     accepted: &mut toml::Table,
-    key: String,
+    key: &str,
     value: toml::Value,
     keys: &[&str],
     prefix: &str,
     line: Option<usize>,
     warnings: &mut Vec<Warning>,
 ) {
-    if !keys.contains(&key.as_str()) {
-        let hint = match similar(&key, keys) {
+    if !keys.contains(&key) {
+        let hint = match similar(key, keys) {
             Some(close) => format!(". Did you mean \"{prefix}{close}\"?"),
             None => String::new(),
         };
@@ -435,7 +441,7 @@ fn accept<T: DeserializeOwned>(
         return;
     }
     let mut trial = accepted.clone();
-    trial.insert(key.clone(), value);
+    trial.insert(key.to_string(), value);
     match toml::Value::Table(trial.clone()).try_into::<T>() {
         Ok(_) => *accepted = trial,
         Err(e) => warnings.push(Warning {
@@ -503,7 +509,8 @@ pub fn save(path: &Path, cfg: &Config) -> Result<(), ConfigError> {
                 '\\' => out.push_str("\\\\"),
                 '\n' => out.push_str("\\n"),
                 '\t' => out.push_str("\\t"),
-                c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+                // Writing to a String cannot fail.
+                c if c.is_control() => _ = write!(out, "\\u{:04X}", c as u32),
                 c => out.push(c),
             }
         }
@@ -584,7 +591,7 @@ fn set_value(text: &str, table: Option<&str>, key: &str, value: &str) -> String 
         if current == table && is_key {
             let indent = &line[..line.len() - line.trim_start().len()];
             let mut out: String = lines[..i].concat();
-            out.push_str(&format!("{indent}{key} = {value}\n"));
+            _ = writeln!(out, "{indent}{key} = {value}");
             out.push_str(&lines[i + 1..].concat());
             return out;
         }
@@ -599,7 +606,7 @@ fn set_value(text: &str, table: Option<&str>, key: &str, value: &str) -> String 
             if !out.is_empty() && !out.ends_with('\n') {
                 out.push('\n');
             }
-            out.push_str(&format!("\n[{name}]\n{new_line}"));
+            _ = write!(out, "\n[{name}]\n{new_line}");
             out
         }
     }
@@ -619,7 +626,7 @@ fn replace_pinned(text: &str, pinned: &[String]) -> String {
     let mut block = String::from("pinned = [\n");
     for p in pinned {
         let escaped = p.replace('\\', "\\\\").replace('"', "\\\"");
-        block.push_str(&format!("    \"{escaped}\",\n"));
+        _ = writeln!(block, "    \"{escaped}\",");
     }
     block.push(']');
 
@@ -650,8 +657,7 @@ fn replace_pinned(text: &str, pinned: &[String]) -> String {
             Some((here, line))
         })
         .find(|(_, line)| line.trim_start().starts_with('['))
-        .map(|(pos, _)| pos)
-        .unwrap_or(text.len());
+        .map_or(text.len(), |(pos, _)| pos);
     format!("{}{}\n\n{}", &text[..insert_at], block, &text[insert_at..])
 }
 

@@ -29,16 +29,15 @@ enum DirKind {
 }
 
 impl ThemeDir {
-    /// Distance between the requested size and this directory (spec: DirectorySizeDistance).
+    /// Distance between the requested size and this directory (spec: `DirectorySizeDistance`).
     fn distance(&self, size: u32) -> u32 {
         match self.kind {
             DirKind::Fixed => self.size.abs_diff(size),
             DirKind::Scalable if size < self.min => self.min - size,
             DirKind::Scalable if size > self.max => size - self.max,
-            DirKind::Scalable => 0,
             DirKind::Threshold if size + self.threshold < self.size => self.min.saturating_sub(size),
             DirKind::Threshold if size > self.size + self.threshold => size.saturating_sub(self.max),
-            DirKind::Threshold => 0,
+            DirKind::Scalable | DirKind::Threshold => 0,
         }
     }
 }
@@ -245,7 +244,7 @@ pub fn fit(image: &Pixmap, size: u32) -> Pixmap {
     out
 }
 
-/// Converts _NET_WM_ICON data (several ARGB images) to the best fitting pixmap.
+/// Converts _`NET_WM_ICON` data (several ARGB images) to the best fitting pixmap.
 pub fn from_net_wm_icon(data: &[u32], size: u32) -> Option<Pixmap> {
     let mut best: Option<(u32, u32, &[u32])> = None;
     let mut rest = data;
