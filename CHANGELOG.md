@@ -11,25 +11,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- *(settings)* show the problems of the configuration file
-- *(cli)* add --check-config
-- *(config)* [**breaking**] keep the valid settings when one is wrong
+- `dockling --check-config [FILE]` lists the problems of the configuration file as `file:line: message`, and exits with 1 when there is one.
+- Dock Settings shows the problems of the configuration file in a warning bar when it opens.
+- The crate is packaged for crates.io (`cargo install dockling`), with its configuration library documented for docs.rs.
 
 ### Changed
 
-- *(text)* draw text with skrifa instead of the unmaintained ttf-parser
-- report the dock's errors with anyhow and context
-
-### Documentation
-
-- *(readme)* crates.io install, --check-config and how to contribute
-- use the Keep a Changelog format
-- document the library API with tested examples
+- A typo in `config.toml` no longer resets every setting: an unknown key (with a suggestion), a wrong value or a value out of range is skipped or brought back into range, with its line number, and every other setting still applies.
+- Text is drawn with skrifa instead of the unmaintained ttf-parser (RUSTSEC-2026-0192). The dock grows from about 2.0 to 2.2 MB.
+- Clearer error messages, for example when there is no X server to connect to.
+- Each release runs every check (tests on Xvfb, Clippy, MSRV, cargo-deny) before anything is published, and also carries `dockling_amd64.deb` under a name that does not change.
+- Library: `config::load` returns the configuration with its warnings (`Result<Loaded, ConfigError>`) instead of printing them; `config::parse` is new; `save` and `save_pinned` return `ConfigError`.
 
 ### Fixed
 
-- *(config)* save pinned apps atomically
-- *(config)* reject non-ASCII colors instead of panicking
+- The dock no longer crashes at startup on a color with a non-ASCII character, such as a non-breaking space.
+- Pinned apps are saved atomically, so the settings window never reads a half-written file.
 
 ## [0.2.1](https://github.com/alexandreravelli/dockling/compare/v0.2.0...v0.2.1) - 2026-10-10
 
