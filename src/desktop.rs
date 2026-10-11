@@ -58,9 +58,13 @@ pub fn data_dirs() -> Vec<PathBuf> {
 /// later directory is ignored, even when the first entry is hidden.
 #[must_use]
 pub fn load_apps() -> Vec<App> {
+    load_apps_in(&data_dirs())
+}
+
+fn load_apps_in(dirs: &[PathBuf]) -> Vec<App> {
     let mut apps = Vec::new();
     let mut seen = HashSet::new();
-    for dir in data_dirs() {
+    for dir in dirs {
         scan(&dir.join("applications"), "", &mut apps, &mut seen);
     }
     apps
@@ -297,6 +301,72 @@ mod tests {
             terminal: false,
             no_display: false,
         }
+    }
+
+    fn write(dir: &Path, rel: &str, text: &str) -> PathBuf {
+        let path = dir.join(rel);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text).unwrap();
+        path
+    }
+
+    #[test]
+    fn reads_desktop_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(
+            dir.path(),
+            "editor.desktop",
+            "# comment\n[Desktop Entry]\nType=Application\nName=My\\sEditor\nExec=editor --new %F\nIcon=accessories-text-editor\n\
+             StartupWMClass=MyEditor\nTerminal=false\nNoDisplay=true\n[Desktop Action new]\nName=Ignored\nExec=ignored\n",
+        );
+        let app = parse(&path, "editor".into()).unwrap();
+        assert_eq!((app.name.as_str(), app.exec.clone()), ("My Editor", vec!["editor".to_string(), "--new".into()]));
+        assert_eq!((app.icon.as_str(), app.wm_class.as_str()), ("accessories-text-editor", "myeditor"));
+        assert!(app.no_display && !app.terminal);
+        let skipped = [
+            "[Desktop Entry]\nType=Link\nName=L\nExec=x\n",
+            "[Desktop Entry]\nName=H\nExec=x\nHidden=true\n",
+            "[Desktop Entry]\nName=No command\n",
+            "[Desktop Entry]\nName=Only codes\nExec=%U\n",
+        ];
+        for text in skipped {
+            assert!(parse(&write(dir.path(), "x.desktop", text), "x".into()).is_none(), "{text}");
+        }
+        assert!(parse(&dir.path().join("missing.desktop"), "m".into()).is_none());
+        // The name defaults to the id.
+        let app =
+            parse(&write(dir.path(), "n.desktop", "[Desktop Entry]\nExec=tool\nTerminal=true\n"), "n".into()).unwrap();
+        assert_eq!((app.name.as_str(), app.terminal), ("n", true));
+    }
+
+    #[test]
+    fn the_first_directory_wins_and_subdirectories_prefix_the_id() {
+        let (user, system) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        write(user.path(), "applications/a.desktop", "[Desktop Entry]\nName=Mine\nExec=a\nHidden=true\n");
+        write(system.path(), "applications/a.desktop", "[Desktop Entry]\nName=System A\nExec=a\n");
+        write(system.path(), "applications/b.desktop", "[Desktop Entry]\nName=B\nExec=b\n");
+        write(system.path(), "applications/kde4/c.desktop", "[Desktop Entry]\nName=C\nExec=c\n");
+        let apps = load_apps_in(&[user.path().to_path_buf(), system.path().to_path_buf()]);
+        let ids: Vec<&str> = apps.iter().map(|a| a.id.as_str()).collect();
+        assert_eq!(ids, ["b", "kde4-c"], "the user's hidden a.desktop hides the system one");
+    }
+
+    #[test]
+    fn unescapes_values() {
+        assert_eq!(unescape(r"a\sb\tc\nd\re\\f\qg\"), "a b\tc\nd\re\\f\\qg\\");
+    }
+
+    #[test]
+    fn pinned_entries_resolve_by_path_and_by_exec() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write(dir.path(), "custom.desktop", "[Desktop Entry]\nName=Custom\nExec=/opt/custom/bin/run\n");
+        let mut apps = Vec::new();
+        assert_eq!(resolve(&mut apps, &path.to_string_lossy()), Some(0), "an absolute path is read");
+        assert_eq!(resolve(&mut apps, &path.to_string_lossy()), Some(0), "and only once");
+        assert_eq!(resolve(&mut apps, "run"), Some(0), "the program's name");
+        assert_eq!(resolve(&mut apps, "/no/such.desktop"), None);
+        assert_eq!(match_window(&apps, "run", "Run"), Some(0));
+        assert_eq!(match_window(&apps, "", ""), None);
     }
 
     #[test]
