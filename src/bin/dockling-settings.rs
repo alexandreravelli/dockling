@@ -235,7 +235,7 @@ fn appearance_page(state: &Rc<State>) -> gtk::Widget {
 
     let list = group(&content, "Icons");
     let size = gtk::Scale::with_range(gtk::Orientation::Horizontal, 16.0, 128.0, 2.0);
-    size.set_value(cfg.icon_size as f64);
+    size.set_value(f64::from(cfg.icon_size));
     size.set_digits(0);
     size.set_value_pos(gtk::PositionType::Right);
     size.set_size_request(240, -1);
@@ -257,25 +257,25 @@ fn appearance_page(state: &Rc<State>) -> gtk::Widget {
         &list,
         "Padding around icons",
         None,
-        &spin(cfg.icon_padding as f64, 0.0, 64.0, 1.0, 0, state, |c, v| c.icon_padding = v as u32),
+        &spin(f64::from(cfg.icon_padding), 0.0, 64.0, 1.0, 0, state, |c, v| c.icon_padding = v as u32),
     );
     row(
         &list,
         "Space between icons",
         None,
-        &spin(cfg.spacing as f64, 0.0, 64.0, 1.0, 0, state, |c, v| c.spacing = v as u32),
+        &spin(f64::from(cfg.spacing), 0.0, 64.0, 1.0, 0, state, |c, v| c.spacing = v as u32),
     );
     row(
         &list,
         "Margin along the edges",
         None,
-        &spin(cfg.margin as f64, 0.0, 64.0, 1.0, 0, state, |c, v| c.margin = v as u32),
+        &spin(f64::from(cfg.margin), 0.0, 64.0, 1.0, 0, state, |c, v| c.margin = v as u32),
     );
     row(
         &list,
         "Corner radius",
         Some("Highlights, and the dock itself when it is not full length"),
-        &spin(cfg.corner_radius as f64, 0.0, 64.0, 1.0, 0, state, |c, v| c.corner_radius = v as f32),
+        &spin(f64::from(cfg.corner_radius), 0.0, 64.0, 1.0, 0, state, |c, v| c.corner_radius = v as f32),
     );
     page.upcast()
 }
@@ -317,7 +317,12 @@ fn behavior_page(state: &Rc<State>) -> gtk::Widget {
 
     let list = group(&content, "Tooltips and menus");
     row(&list, "Show app names on hover", None, &switch(cfg.tooltips, state, |c, v| c.tooltips = v));
-    row(&list, "Text size", None, &spin(cfg.font_size as f64, 6.0, 72.0, 1.0, 0, state, |c, v| c.font_size = v as f32));
+    row(
+        &list,
+        "Text size",
+        None,
+        &spin(f64::from(cfg.font_size), 6.0, 72.0, 1.0, 0, state, |c, v| c.font_size = v as f32),
+    );
     row(
         &list,
         "Font file",
@@ -336,9 +341,9 @@ fn behavior_page(state: &Rc<State>) -> gtk::Widget {
 }
 
 fn colors_page(state: &Rc<State>) -> gtk::Widget {
+    type Setter = fn(&mut Config, Color);
     let (page, content) = page();
     let c = state.cfg.borrow().colors.clone();
-    type Setter = fn(&mut Config, Color);
     let dock: [(&str, Color, Setter); 6] = [
         ("Background", c.background, |cfg, v| cfg.colors.background = v),
         ("Hovered icon", c.hover, |cfg, v| cfg.colors.hover = v),
@@ -562,7 +567,7 @@ fn choose_app(parent: Option<&gtk::Window>, state: &Rc<State>) -> Option<String>
             *search_text.borrow_mut() = s.text().to_lowercase();
             list.invalidate_filter();
             // Keep the selection on the first match, so Enter adds what is shown.
-            let first = (0..).map_while(|i| list.row_at_index(i)).find(|r| r.is_child_visible());
+            let first = (0..).map_while(|i| list.row_at_index(i)).find(gtk::prelude::WidgetExt::is_child_visible);
             list.select_row(first.as_ref());
         }
     ));
@@ -725,8 +730,12 @@ fn entry(value: &str, placeholder: &str, state: &Rc<State>, set: impl Fn(&mut Co
 }
 
 fn color_button(color: Color, state: &Rc<State>, set: fn(&mut Config, Color)) -> gtk::ColorButton {
-    let rgba =
-        gdk::RGBA::new(color.r as f64 / 255.0, color.g as f64 / 255.0, color.b as f64 / 255.0, color.a as f64 / 255.0);
+    let rgba = gdk::RGBA::new(
+        f64::from(color.r) / 255.0,
+        f64::from(color.g) / 255.0,
+        f64::from(color.b) / 255.0,
+        f64::from(color.a) / 255.0,
+    );
     let button = gtk::ColorButton::with_rgba(&rgba);
     button.set_use_alpha(true);
     button.connect_color_set(glib::clone!(

@@ -6,6 +6,7 @@ use crate::icons::{self, IconFinder};
 use crate::text::Text;
 use anyhow::{Context, bail};
 use std::borrow::Cow;
+use std::cell::OnceCell;
 use std::collections::HashMap;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
@@ -16,7 +17,11 @@ use x11rb::connection::{Connection, RequestConnection};
 use x11rb::image::{BitsPerPixel, Image, ImageOrder, ScanlinePad};
 use x11rb::protocol::Event;
 use x11rb::protocol::randr::{self, ConnectionExt as _};
-use x11rb::protocol::xproto::*;
+use x11rb::protocol::xproto::{
+    Atom, AtomEnum, ChangeWindowAttributesAux, ClientMessageEvent, Colormap, ColormapAlloc, ConfigureWindowAux,
+    ConnectionExt, CreateGCAux, CreateWindowAux, EventMask, Gcontext, GrabMode, NotifyDetail, NotifyMode, PropMode,
+    Screen, StackMode, Timestamp, VisualClass, Visualid, Window, WindowClass,
+};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 use x11rb::{CURRENT_TIME, NONE};
@@ -159,7 +164,8 @@ pub struct Dock {
     apps: Vec<App>,
     icons: IconFinder,
     icon_cache: HashMap<String, Option<Pixmap>>,
-    font: Option<Option<Text>>,
+    /// Loaded on first use; None inside when no font is usable.
+    font: OnceCell<Option<Text>>,
 
     clients: HashMap<Window, Option<Client>>,
     order: Vec<Window>,
@@ -229,6 +235,7 @@ fn argb_visual(screen: &Screen) -> Option<Visualid> {
         .map(|v| v.visual_id)
 }
 
+#[expect(clippy::too_many_lines, reason = "sets up the dock window's properties in one place")]
 pub fn run(replace: bool) -> Res<()> {
     let (conn, screen_num) = connect()?;
     let screen = conn.setup().roots[screen_num].clone();
@@ -329,7 +336,7 @@ pub fn run(replace: bool) -> Res<()> {
         cfg,
         cfg_path,
         icon_cache: HashMap::new(),
-        font: None,
+        font: OnceCell::new(),
         clients: HashMap::new(),
         order: Vec::new(),
         active: NONE,
@@ -360,7 +367,7 @@ impl Dock {
             .get_property(false, w, prop, ty, 0, u32::MAX / 4)
             .ok()
             .and_then(|c| c.reply().ok())
-            .and_then(|r| r.value32().map(|v| v.collect()))
+            .and_then(|r| r.value32().map(std::iter::Iterator::collect))
             .unwrap_or_default()
     }
 
@@ -457,10 +464,7 @@ impl Dock {
     }
 
     fn text(&mut self) -> Option<&Text> {
-        if self.font.is_none() {
-            self.font = Some(Text::load(&self.cfg.font, self.cfg.font_size));
-        }
-        self.font.as_ref().and_then(|f| f.as_ref())
+        self.font.get_or_init(|| Text::load(&self.cfg.font, self.cfg.font_size)).as_ref()
     }
 
     // ---------------------------------------------------------------- state
@@ -491,13 +495,12 @@ impl Dock {
         let instance = parts.next().unwrap_or_default();
         let class = parts.next().filter(|c| !c.is_empty()).unwrap_or_else(|| instance.clone());
         let app = desktop::match_window(&self.apps, &instance, &class);
-        let (group, name, icon_hint) = match app {
-            Some(i) => (self.apps[i].id.clone(), self.apps[i].name.clone(), self.apps[i].icon.clone()),
-            None => {
-                let lower = class.to_lowercase();
-                let name = if class.is_empty() { "Unknown".into() } else { class.clone() };
-                (format!("class:{lower}"), name, lower)
-            }
+        let (group, name, icon_hint) = if let Some(i) = app {
+            (self.apps[i].id.clone(), self.apps[i].name.clone(), self.apps[i].icon.clone())
+        } else {
+            let lower = class.to_lowercase();
+            let name = if class.is_empty() { "Unknown".into() } else { class.clone() };
+            (format!("class:{lower}"), name, lower)
         };
         Some(Client { group, app, name, icon_hint, attention: state.contains(&a._NET_WM_STATE_DEMANDS_ATTENTION) })
     }
@@ -612,13 +615,10 @@ impl Dock {
     // ---------------------------------------------------------------- geometry
 
     fn read_monitor(&self) -> R {
-        let root_geom = self
-            .conn
-            .get_geometry(self.root)
-            .ok()
-            .and_then(|c| c.reply().ok())
-            .map(|g| R { x: 0, y: 0, w: g.width as u32, h: g.height as u32 })
-            .unwrap_or(R { x: 0, y: 0, w: 1024, h: 768 });
+        let root_geom = self.conn.get_geometry(self.root).ok().and_then(|c| c.reply().ok()).map_or(
+            R { x: 0, y: 0, w: 1024, h: 768 },
+            |g| R { x: 0, y: 0, w: u32::from(g.width), h: u32::from(g.height) },
+        );
         let has_randr = self.conn.extension_information(randr::X11_EXTENSION_NAME).ok().flatten().is_some();
         if !has_randr {
             return root_geom;
@@ -634,13 +634,13 @@ impl Dock {
             .iter()
             .find(|m| m.primary)
             .or_else(|| monitors.first())
-            .map(|m| R { x: m.x as i32, y: m.y as i32, w: m.width as u32, h: m.height as u32 })
+            .map(|m| R { x: i32::from(m.x), y: i32::from(m.y), w: u32::from(m.width), h: u32::from(m.height) })
             .filter(|m| m.w > 0 && m.h > 0)
             .unwrap_or(root_geom)
     }
 
     /// Space taken by other panels at the start/end of the dock's edge, read from
-    /// _NET_WORKAREA (our own strut only affects the other axis).
+    /// _`NET_WORKAREA` (our own strut only affects the other axis).
     fn panel_offsets(&self, mon: R) -> (u32, u32) {
         let desktop =
             self.prop32(self.root, self.atoms._NET_CURRENT_DESKTOP, AtomEnum::CARDINAL).first().copied().unwrap_or(0)
@@ -649,11 +649,11 @@ impl Dock {
         let Some(wa) = wa.get(desktop * 4..desktop * 4 + 4).or_else(|| wa.get(0..4)) else {
             return (0, 0);
         };
-        let (wx, wy, ww, wh) = (wa[0] as i64, wa[1] as i64, wa[2] as i64, wa[3] as i64);
+        let (wx, wy, ww, wh) = (i64::from(wa[0]), i64::from(wa[1]), i64::from(wa[2]), i64::from(wa[3]));
         let (start, end, len) = if self.cfg.position.horizontal() {
-            (wx - mon.x as i64, (mon.x as i64 + mon.w as i64) - (wx + ww), mon.w as i64)
+            (wx - i64::from(mon.x), (i64::from(mon.x) + i64::from(mon.w)) - (wx + ww), i64::from(mon.w))
         } else {
-            (wy - mon.y as i64, (mon.y as i64 + mon.h as i64) - (wy + wh), mon.h as i64)
+            (wy - i64::from(mon.y), (i64::from(mon.y) + i64::from(mon.h)) - (wy + wh), i64::from(mon.h))
         };
         let clamp = |v: i64| v.clamp(0, len / 3) as u32;
         (clamp(start), clamp(end))
@@ -665,10 +665,10 @@ impl Dock {
         let (s0, s1) = self.panel_offsets(mon);
         let cfg = &self.cfg;
         let horizontal = cfg.position.horizontal();
-        let avail = (if horizontal { mon.w } else { mon.h }).saturating_sub(s0 + s1) as i64;
+        let avail = i64::from((if horizontal { mon.w } else { mon.h }).saturating_sub(s0 + s1));
         let n = self.items.len().max(1) as i64;
-        let full_cell = (cfg.icon_size + 2 * cfg.icon_padding) as i64;
-        let (sp, m) = (cfg.spacing as i64, cfg.margin as i64);
+        let full_cell = i64::from(cfg.icon_size + 2 * cfg.icon_padding);
+        let (sp, m) = (i64::from(cfg.spacing), i64::from(cfg.margin));
         let need = |cell: i64| n * cell + (n - 1) * sp + 2 * m;
         let mut cell = full_cell;
         if need(cell) > avail {
@@ -676,9 +676,9 @@ impl Dock {
         }
         let thickness = full_cell + 2 * m;
         let length = if cfg.extend { avail } else { need(cell).min(avail) }.max(1);
-        let start = s0 as i64 + if cfg.extend { 0 } else { (avail - length) / 2 };
+        let start = i64::from(s0) + if cfg.extend { 0 } else { (avail - length) / 2 };
 
-        let icon_px = ((cell * cfg.icon_size as i64) / full_cell).max(8) as u32;
+        let icon_px = ((cell * i64::from(cfg.icon_size)) / full_cell).max(8) as u32;
         if icon_px != self.icon_px {
             self.icon_px = icon_px;
             self.icon_cache.clear();
@@ -730,7 +730,7 @@ impl Dock {
     fn set_struts(&mut self, g: R) -> Res<()> {
         let mut s = [0u32; 12];
         if self.cfg.reserve_space && !self.cfg.autohide {
-            let root = self.conn.get_geometry(self.root)?.reply().map(|r| (r.width as i32, r.height as i32))?;
+            let root = self.conn.get_geometry(self.root)?.reply().map(|r| (i32::from(r.width), i32::from(r.height)))?;
             let (x0, x1) = (g.x.max(0) as u32, (g.x + g.w as i32 - 1).max(0) as u32);
             let (y0, y1) = (g.y.max(0) as u32, (g.y + g.h as i32 - 1).max(0) as u32);
             match self.cfg.position {
@@ -828,7 +828,7 @@ impl Dock {
                 Kind::AppsButton => draw_grid(&mut pm, R { x: ix, y: iy, w: px, h: px }, c.apps_button),
                 Kind::App => match self.icon_cache.get(&item.key).and_then(|i| i.as_ref()) {
                     Some(icon) => {
-                        pm.draw_pixmap(ix, iy, icon.as_ref(), &PixmapPaint::default(), Transform::identity(), None)
+                        pm.draw_pixmap(ix, iy, icon.as_ref(), &PixmapPaint::default(), Transform::identity(), None);
                     }
                     None => placeholders.push((R { x: ix + 2, y: iy + 2, w: px - 4, h: px - 4 }, item.name.clone())),
                 },
@@ -931,13 +931,12 @@ impl Dock {
         fill_rrect(&mut pm, R { x: 0, y: 0, w, h }, if argb { 6.0 } else { 0.0 }, bg);
         text.draw(&mut pm, pad_x as i32, pad_y as i32, &label, colors.text, tw);
         let r = self.popup_rect(rect, w, h);
-        let win = match self.tooltip_win {
-            Some(win) => win,
-            None => {
-                let win = self.create_popup(self.atoms._NET_WM_WINDOW_TYPE_TOOLTIP)?;
-                self.tooltip_win = Some(win);
-                win
-            }
+        let win = if let Some(win) = self.tooltip_win {
+            win
+        } else {
+            let win = self.create_popup(self.atoms._NET_WM_WINDOW_TYPE_TOOLTIP)?;
+            self.tooltip_win = Some(win);
+            win
         };
         self.show_popup(win, r, &pm)?;
         self.tooltip_for = Some(key);
@@ -989,13 +988,12 @@ impl Dock {
         let w = entries.iter().map(|(l, _)| text.width(l)).max().unwrap_or(0).max(120) + 32;
         let h = entries.len() as u32 * row_h + 2 * MENU_PAD;
         let r = self.popup_rect(rect, w, h);
-        let win = match self.menu_win {
-            Some(win) => win,
-            None => {
-                let win = self.create_popup(self.atoms._NET_WM_WINDOW_TYPE_POPUP_MENU)?;
-                self.menu_win = Some(win);
-                win
-            }
+        let win = if let Some(win) = self.menu_win {
+            win
+        } else {
+            let win = self.create_popup(self.atoms._NET_WM_WINDOW_TYPE_POPUP_MENU)?;
+            self.menu_win = Some(win);
+            win
         };
         self.menu = Some(Menu { rect: r, entries, hover: None, row_h });
         self.draw_menu()?;
@@ -1069,13 +1067,13 @@ impl Dock {
     fn pointer_inside(&self) -> Res<bool> {
         let p = self.conn.query_pointer(self.root)?.reply()?;
         let g = self.geom;
-        Ok(R { x: g.x, y: g.y, w: g.w, h: g.h }.contains(p.root_x as i32, p.root_y as i32))
+        Ok(R { x: g.x, y: g.y, w: g.w, h: g.h }.contains(i32::from(p.root_x), i32::from(p.root_y)))
     }
 
     // ---------------------------------------------------------------- actions
 
-    fn spawn(&mut self, argv: &[String]) {
-        let Some((prog, args)) = argv.split_first() else {
+    fn spawn(&mut self, command: &[String]) {
+        let Some((prog, args)) = command.split_first() else {
             return;
         };
         let mut cmd = Command::new(prog);
@@ -1179,15 +1177,14 @@ impl Dock {
                     .ok()
                     .and_then(|p| Some(p.parent()?.join("dockling-settings")))
                     .filter(|p| p.is_file());
-                match beside {
-                    Some(settings) => self.spawn(&[settings.to_string_lossy().into_owned()]),
-                    None => {
-                        let path = format!("'{}'", self.cfg_path.to_string_lossy().replace('\'', "'\\''"));
-                        self.run_shell(&format!(
-                            "if command -v dockling-settings >/dev/null; then exec dockling-settings; \
-                             else exo-open {path} 2>/dev/null || xdg-open {path}; fi"
-                        ));
-                    }
+                if let Some(settings) = beside {
+                    self.spawn(&[settings.to_string_lossy().into_owned()]);
+                } else {
+                    let path = format!("'{}'", self.cfg_path.to_string_lossy().replace('\'', "'\\''"));
+                    self.run_shell(&format!(
+                        "if command -v dockling-settings >/dev/null; then exec dockling-settings; \
+                         else exo-open {path} 2>/dev/null || xdg-open {path}; fi"
+                    ));
                 }
             }
             Action::Reload => self.reload()?,
@@ -1221,7 +1218,7 @@ impl Dock {
         self.apps = desktop::load_apps();
         self.icons = IconFinder::new(&icon_theme(&self.conn, self.screen_num, &self.cfg));
         self.icon_cache.clear();
-        self.font = None;
+        self.font = OnceCell::new();
         self.clients.clear();
         self.hidden = false;
         self.hide_at = None;
@@ -1351,11 +1348,14 @@ impl Dock {
     }
 
     /// Returns false when the dock should exit.
+    #[expect(clippy::too_many_lines, reason = "one match over the X events the dock reacts to")]
     fn handle(&mut self, event: Event) -> Res<bool> {
         let a = self.atoms;
         match event {
             Event::MotionNotify(e) if self.menu.is_some() => {
-                let row = self.menu_row(e.event_x as i32, e.event_y as i32).filter(|_| self.menu_win == Some(e.event));
+                let row = self
+                    .menu_row(i32::from(e.event_x), i32::from(e.event_y))
+                    .filter(|_| self.menu_win == Some(e.event));
                 if self.menu.as_ref().is_some_and(|m| m.hover != row) {
                     if let Some(m) = self.menu.as_mut() {
                         m.hover = row;
@@ -1364,13 +1364,15 @@ impl Dock {
                 }
             }
             Event::MotionNotify(e) if e.event == self.win && self.drag.is_some() => {
-                self.on_drag_motion(e.event_x as i32, e.event_y as i32)?
+                self.on_drag_motion(i32::from(e.event_x), i32::from(e.event_y))?;
             }
-            Event::MotionNotify(e) if e.event == self.win => self.on_motion(e.event_x as i32, e.event_y as i32)?,
+            Event::MotionNotify(e) if e.event == self.win => {
+                self.on_motion(i32::from(e.event_x), i32::from(e.event_y))?;
+            }
             Event::EnterNotify(e) if e.event == self.win => {
                 self.hide_at = None;
                 self.set_hidden(false)?;
-                self.on_motion(e.event_x as i32, e.event_y as i32)?;
+                self.on_motion(i32::from(e.event_x), i32::from(e.event_y))?;
             }
             Event::LeaveNotify(e) if e.event == self.win && self.menu.is_none() && !self.dragging() => {
                 if e.mode == NotifyMode::NORMAL && e.detail != NotifyDetail::INFERIOR {
@@ -1383,7 +1385,7 @@ impl Dock {
             Event::ButtonPress(e) if self.menu.is_some() => {
                 let inside = self.menu_win == Some(e.event)
                     && self.menu.as_ref().is_some_and(|m| {
-                        R { x: 0, y: 0, w: m.rect.w, h: m.rect.h }.contains(e.event_x as i32, e.event_y as i32)
+                        R { x: 0, y: 0, w: m.rect.w, h: m.rect.h }.contains(i32::from(e.event_x), i32::from(e.event_y))
                     });
                 if !inside {
                     self.close_menu()?;
@@ -1391,7 +1393,9 @@ impl Dock {
             }
             Event::ButtonRelease(e) if self.menu.is_some() => {
                 // Releases still addressed to the dock (the click that opened the menu) are ignored.
-                let row = self.menu_row(e.event_x as i32, e.event_y as i32).filter(|_| self.menu_win == Some(e.event));
+                let row = self
+                    .menu_row(i32::from(e.event_x), i32::from(e.event_y))
+                    .filter(|_| self.menu_win == Some(e.event));
                 if let Some(row) = row {
                     let action = self.menu.as_ref().map(|m| m.entries[row].1.clone());
                     self.close_menu()?;
@@ -1401,7 +1405,7 @@ impl Dock {
                 }
             }
             Event::ButtonPress(e) if e.event == self.win => {
-                let at = (e.event_x as i32, e.event_y as i32);
+                let at = (i32::from(e.event_x), i32::from(e.event_y));
                 let Some(idx) = self.item_at(at.0, at.1) else {
                     // Empty part of the dock: the dock's own menu.
                     if e.detail == 3 {
@@ -1417,7 +1421,7 @@ impl Dock {
                     b => {
                         let item = &self.items[idx];
                         if b == 1 && item.kind == Kind::App && item.pinned {
-                            let at = (e.event_x as i32, e.event_y as i32);
+                            let at = (i32::from(e.event_x), i32::from(e.event_y));
                             self.drag = Some(Drag { key: item.key.clone(), origin: at, pos: at, active: false });
                         }
                         self.pressed = Some((self.items[idx].key.clone(), b));
@@ -1433,7 +1437,7 @@ impl Dock {
                 let Some((key, button)) = self.pressed.take() else {
                     return Ok(true);
                 };
-                let Some(idx) = self.item_at(e.event_x as i32, e.event_y as i32) else {
+                let Some(idx) = self.item_at(i32::from(e.event_x), i32::from(e.event_y)) else {
                     return Ok(true);
                 };
                 if self.items[idx].key != key || button != e.detail {
@@ -1528,7 +1532,7 @@ impl Dock {
             }
             let timeout = self.hide_at.map(|at| {
                 let d = at.saturating_duration_since(Instant::now());
-                Timespec { tv_sec: d.as_secs() as _, tv_nsec: d.subsec_nanos() as _ }
+                Timespec { tv_sec: d.as_secs() as _, tv_nsec: d.subsec_nanos().into() }
             });
             let mut fds = [PollFd::new(self.conn.stream(), PollFlags::IN)];
             match poll(&mut fds, timeout.as_ref()) {

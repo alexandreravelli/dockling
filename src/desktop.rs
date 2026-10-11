@@ -12,7 +12,7 @@ pub struct App {
     pub name: String,
     pub exec: Vec<String>,
     pub icon: String,
-    /// Lowercased StartupWMClass, empty when absent.
+    /// Lowercased `StartupWMClass`, empty when absent.
     pub wm_class: String,
     pub terminal: bool,
     /// Hidden from menus (NoDisplay=true); still used to recognize windows.
@@ -48,6 +48,7 @@ pub fn data_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+#[must_use]
 pub fn load_apps() -> Vec<App> {
     let mut apps = Vec::new();
     let mut seen = HashSet::new();
@@ -62,7 +63,7 @@ fn scan(dir: &Path, prefix: &str, apps: &mut Vec<App>, seen: &mut HashSet<String
         return;
     };
     let mut entries: Vec<_> = entries.flatten().collect();
-    entries.sort_by_key(|e| e.file_name());
+    entries.sort_by_key(std::fs::DirEntry::file_name);
     for entry in entries {
         let name = entry.file_name().to_string_lossy().into_owned();
         let path = entry.path();
@@ -80,6 +81,7 @@ fn scan(dir: &Path, prefix: &str, apps: &mut Vec<App>, seen: &mut HashSet<String
     }
 }
 
+#[must_use]
 pub fn parse(path: &Path, id: String) -> Option<App> {
     let text = fs::read_to_string(path).ok()?;
     let mut in_entry = false;
@@ -131,12 +133,11 @@ fn unescape(s: &str) -> String {
             Some('n') => out.push('\n'),
             Some('t') => out.push('\t'),
             Some('r') => out.push('\r'),
-            Some('\\') => out.push('\\'),
+            Some('\\') | None => out.push('\\'),
             Some(other) => {
                 out.push('\\');
                 out.push(other);
             }
-            None => out.push('\\'),
         }
     }
     out
@@ -237,7 +238,8 @@ pub fn resolve(apps: &mut Vec<App>, entry: &str) -> Option<usize> {
         .or_else(|| apps.iter().position(|a| a.exec_name() == lower))
 }
 
-/// Finds the application owning a window from its WM_CLASS (instance, class).
+/// Finds the application owning a window from its `WM_CLASS` (instance, class).
+#[must_use]
 pub fn match_window(apps: &[App], instance: &str, class: &str) -> Option<usize> {
     let inst = instance.to_lowercase();
     let class = class.to_lowercase();
