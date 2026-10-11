@@ -1,6 +1,6 @@
 [package]
 name = "dockling"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 rust-version = "1.92"
 description = "An ultra-lightweight, Ubuntu-style application dock for X11 desktops such as XFCE"
