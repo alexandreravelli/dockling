@@ -302,7 +302,7 @@ pub fn run(replace: bool) -> Res<()> {
     )?;
 
     let cfg_path = config::config_path();
-    let cfg = config::load(&cfg_path);
+    let cfg = load_config(&cfg_path);
     let mut dock = Dock {
         icons: IconFinder::new(&icon_theme(&conn, screen_num, &cfg)),
         apps: desktop::load_apps(),
@@ -1203,7 +1203,7 @@ impl Dock {
         }
         self.apps = apps;
         if let Err(e) = config::save_pinned(&self.cfg_path, &pinned) {
-            eprintln!("dockling: cannot save {}: {e}", self.cfg_path.display());
+            eprintln!("dockling: {e}");
         }
         self.cfg.pinned = pinned;
         self.rebuild_items()
@@ -1212,7 +1212,7 @@ impl Dock {
     fn reload(&mut self) -> Res<()> {
         self.close_menu()?;
         self.hide_tooltip()?;
-        self.cfg = config::load(&self.cfg_path);
+        self.cfg = load_config(&self.cfg_path);
         self.apps = desktop::load_apps();
         self.icons = IconFinder::new(&icon_theme(&self.conn, self.screen_num, &self.cfg));
         self.icon_cache.clear();
@@ -1315,7 +1315,7 @@ impl Dock {
         }
         if pinned != self.cfg.pinned {
             if let Err(e) = config::save_pinned(&self.cfg_path, &pinned) {
-                eprintln!("dockling: cannot save {}: {e}", self.cfg_path.display());
+                eprintln!("dockling: {e}");
             }
             self.cfg.pinned = pinned;
         }
@@ -1530,6 +1530,22 @@ impl Dock {
                 Ok(_) | Err(rustix::io::Errno::INTR) => {}
                 Err(e) => return Err(e.into()),
             }
+        }
+    }
+}
+
+/// The configuration at `path`; its problems go to stderr (`dockling --check-config` lists them).
+fn load_config(path: &std::path::Path) -> Config {
+    match config::load(path) {
+        Ok(loaded) => {
+            for w in &loaded.warnings {
+                eprintln!("dockling: {}: {w}", path.display());
+            }
+            loaded.config
+        }
+        Err(e) => {
+            eprintln!("dockling: {e}; using the default settings");
+            Config::default()
         }
     }
 }
