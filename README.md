@@ -10,6 +10,8 @@
 
 [![CI](https://github.com/alexandreravelli/dockling/actions/workflows/ci.yml/badge.svg)](https://github.com/alexandreravelli/dockling/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/alexandreravelli/dockling?color=e95420)](https://github.com/alexandreravelli/dockling/releases/latest)
+[![crates.io](https://img.shields.io/crates/v/dockling?logo=rust)](https://crates.io/crates/dockling)
+[![docs.rs](https://img.shields.io/docsrs/dockling?logo=docs.rs)](https://docs.rs/dockling)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Rust 1.92+](https://img.shields.io/badge/rust-1.92%2B-orange?logo=rust)](https://www.rust-lang.org)
 [![Debian 13 · XFCE](https://img.shields.io/badge/Debian%2013-XFCE-a80030?logo=debian)](https://www.debian.org)
@@ -41,8 +43,9 @@
 No Rust needed. Grab the `.deb` from the [latest release](https://github.com/alexandreravelli/dockling/releases/latest):
 
 ```sh
-wget https://github.com/alexandreravelli/dockling/releases/download/v0.2.1/dockling_0.2.1-1_amd64.deb
-sudo apt install ./dockling_0.2.1-1_amd64.deb
+cd /tmp
+wget https://github.com/alexandreravelli/dockling/releases/latest/download/dockling_amd64.deb
+sudo apt install ./dockling_amd64.deb
 ```
 
 Log out and back in: the dock starts automatically (`/etc/xdg/autostart/dockling.desktop`).
@@ -68,6 +71,16 @@ sudo make install   # dockling + dockling-settings in /usr/local, autostart for 
 Just the dock, without GTK? `cargo build --release --no-default-features --features svg`.
 Leave out `--features svg` too for an even smaller binary without SVG icons.
 
+### From crates.io
+
+```sh
+cargo install dockling                                        # needs libgtk-3-dev for Dock Settings
+cargo install dockling --no-default-features --features svg   # the dock alone
+```
+
+`cargo install` puts the programs in `~/.cargo/bin`; add `dockling &` to your session's autostart
+(*Settings > Session and Startup > Application Autostart*).
+
 ### 💡 XFCE tips
 
 - **Remove the duplicate bottom panel** that Debian's XFCE ships with:
@@ -92,6 +105,7 @@ dockling --replace               start, replacing a running instance
 dockling --reload                apply configuration changes
 dockling --quit                  stop the dock
 dockling --print-default-config  show every option with its default
+dockling --check-config          list the problems of the config file, with their line
 dockling-settings                open the settings window
 ```
 
@@ -131,6 +145,15 @@ indicator = "#e95420"
 Pinned entries can be `.desktop` file names (with or without `.desktop`), short names like
 `mousepad` for `org.xfce.mousepad.desktop`, or absolute paths to `.desktop` files.
 
+A typo never resets the whole file: an unknown key or a wrong value is skipped and the other
+settings still apply. `dockling --check-config` lists what was skipped, and Dock Settings shows it:
+
+```text
+$ dockling --check-config
+/home/me/.config/dockling/config.toml:12: unknown setting "tooltip". Did you mean "tooltips"?
+1 problem: the dock skips these settings and uses all the others.
+```
+
 ### 🏢 For administrators
 
 Place a template in `/etc/xdg/dockling/config.toml` (`sudo make install-config` installs the default one).
@@ -142,7 +165,7 @@ Dock Settings keeps the comments in the file when it saves.
 Dockling speaks X11 directly through [x11rb](https://github.com/psychon/x11rb) (pure Rust, no libxcb),
 follows windows through EWMH properties such as `_NET_CLIENT_LIST` and `_NET_ACTIVE_WINDOW`,
 draws with [tiny-skia](https://github.com/linebender/tiny-skia), renders SVG icons with
-[resvg](https://github.com/linebender/resvg) and text with [ttf-parser](https://github.com/harfbuzz/ttf-parser).
+[resvg](https://github.com/linebender/resvg) and text with [skrifa](https://github.com/googlefonts/fontations).
 The finished image becomes the window's background, so the X server repaints it on its own.
 Dock Settings is a separate GTK 3 program ([gtk-rs](https://gtk-rs.org)) that edits the same file and asks the
 dock to reload, so the dock itself never loads a toolkit.
@@ -156,6 +179,12 @@ It works with any EWMH window manager and is tested with xfwm4.
 - [ ] Multi-monitor placement option
 
 Ideas and bug reports are welcome in [Issues](https://github.com/alexandreravelli/dockling/issues).
+
+## 🤝 Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the setup, the checks and the commit format, and
+[SECURITY.md](SECURITY.md) to report a vulnerability. The configuration code is a documented
+library: [docs.rs/dockling](https://docs.rs/dockling).
 
 ## 📄 License
 
