@@ -318,7 +318,11 @@ pub fn save(path: &Path, cfg: &Config) -> std::io::Result<()> {
         text = set_value(&text, Some("colors"), key, &str_value(&color.to_hex()));
     }
     text = replace_pinned(&text, &cfg.pinned);
-    // Write then rename, so the dock never reads a half-written file.
+    write_atomically(path, &text)
+}
+
+/// Writes then renames, so the dock and the settings window never read a half-written file.
+fn write_atomically(path: &Path, text: &str) -> std::io::Result<()> {
     let tmp = path.with_extension("toml.tmp");
     fs::write(&tmp, text)?;
     fs::rename(tmp, path)
@@ -368,7 +372,7 @@ fn set_value(text: &str, table: Option<&str>, key: &str, value: &str) -> String 
 /// Rewrites only the `pinned = [...]` entry of the file, keeping the user's comments.
 pub fn save_pinned(path: &Path, pinned: &[String]) -> std::io::Result<()> {
     let text = fs::read_to_string(path).unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
-    fs::write(path, replace_pinned(&text, pinned))
+    write_atomically(path, &replace_pinned(&text, pinned))
 }
 
 fn replace_pinned(text: &str, pinned: &[String]) -> String {
@@ -461,6 +465,19 @@ mod tests {
         }
         text = set_value(&text, Some("colors"), "indicator", "\"#e95420\"");
         assert_eq!(text, DEFAULT_CONFIG);
+    }
+
+    #[test]
+    fn pinned_apps_are_saved_in_place() {
+        let dir = std::env::temp_dir().join(format!("dockling-pinned-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, "# mine\npinned = [\"a\"]\nicon_size = 40\n").unwrap();
+        save_pinned(&path, &["b".into(), "c".into()]).unwrap();
+        let parsed: Config = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!((parsed.pinned, parsed.icon_size), (vec!["b".to_string(), "c".to_string()], 40));
+        assert!(!path.with_extension("toml.tmp").exists());
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
